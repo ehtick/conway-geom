@@ -130,6 +130,13 @@ class ConwayGeometryProcessor {
   Geometry BoolSubtractLegacy(const std::vector<Geometry>& firstGeoms,
                               std::vector<Geometry>& secondGeoms);
 
+  struct ParamsSphericalSurface {
+    uint32_t xLength = 0;
+    uint32_t yLength = 0;
+    uint32_t zLength = 0;
+    glm::dmat4 placement = glm::dmat4(1.0);
+  };
+
   struct ParamsGetBlock {
     uint32_t xLength = 0;
     uint32_t yLength = 0;
@@ -360,7 +367,12 @@ class ConwayGeometryProcessor {
     bool isRationalBsplineSurfaceWithKnots = false;
     std::vector<std::vector<glm::f64>> weightPts;
     bool isCylindricalSurface = false;
+    bool isSphericalSurface = false;
+    bool isToroidalSurface = false;
+    bool isConicalSurface = false;
     double radius = 0;
+    double radius2 = 0;  // For toroidal surface
+    double semiAngle = 0;  // For conical surface
     bool isSurfaceOfRevolution = false;
     glm::dmat4 revolutionDirection;
     IfcProfile revolutionProfile;

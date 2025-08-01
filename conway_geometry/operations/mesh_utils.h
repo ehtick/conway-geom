@@ -25,6 +25,7 @@ namespace conway::geometry {
 constexpr double MAX_DEFLECTION            = 0.001;
 constexpr double MAX_TRIANGLE_AMPLIFACTION = 32;
 
+
 // TODO: review and simplify
 inline void TriangulateRevolution(Geometry &geometry,
                                   std::vector<IfcBound3D> &bounds,

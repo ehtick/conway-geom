@@ -6,8 +6,19 @@
 #include "structures/winged_edge.h"
 #include <queue>
 #include "representation/Geometry.h"
+#include "representation/IfcGeometryReps.h"
+
 
 namespace conway::geometry {
+
+  struct BoundaryLoop {
+
+    std::vector< glm::dvec3 > points;
+    std::vector< glm::dvec2 > parameterization;
+    std::vector< glm::dvec2 > points2D;
+    std::vector< uint32_t >   identities;
+
+  };
 
   /**
    * A UV parameterized vertex on 2 parameter surface.

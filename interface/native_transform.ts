@@ -25,10 +25,12 @@ export interface NativeTransform extends Deletable {
   setValues( values: ArrayLike<number> ): void
 }
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface NativeTransform3x3 extends NativeTransform {
 
 }
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface NativeTransform4x4 extends NativeTransform {
 
 }

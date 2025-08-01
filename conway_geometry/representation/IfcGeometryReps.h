@@ -261,10 +261,30 @@ struct IfcBound3D {
   IfcCurve curve;
 };
 
+struct Cone {
+  bool Active = false;
+  double Radius = 0;
+  double SemiAngle = 0;
+};
+
+struct Torus {
+  bool Active = false;
+  double MinorRadius = 0;
+  double MajorRadius = 0;
+};
+
+struct Sphere {
+  bool Active = false;
+  double Radius = 0;
+};
+
 struct IfcSurface {
   glm::dmat4 transformation;
   BSpline BSplineSurface;
   Cylinder CylinderSurface;
+  Sphere SphericalSurface;
+  Cone ConicalSurface;
+  Torus ToroidalSurface;
   Revolution RevolutionSurface;
   Extrusion ExtrusionSurface;
 
@@ -273,15 +293,6 @@ struct IfcSurface {
         !RevolutionSurface.Active) {
       return transformation[2];
     } else {
-      if (BSplineSurface.Active) {
-        Logger::logWarning("Normal to bspline still not implemented\n");
-      }
-      if (CylinderSurface.Active) {
-        Logger::logWarning("Normal to cylinder still not implemented\n");
-      }
-      if (RevolutionSurface.Active) {
-        Logger::logWarning("Normal to revolution still not implemented\n");
-      }
       return glm::dvec3(0);
     }
   }
