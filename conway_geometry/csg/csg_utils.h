@@ -51,38 +51,9 @@ namespace conway::geometry {
    *  As long as the triangle is non-zero area, given that orient2D is exact, it should
    *  give us the truncated axis projection with the biggest area.
    */
-  inline AxisPair best_truncated_projection( const glm::dvec3& v0, const glm::dvec3& v1, const glm::dvec3& v2 ) {
-
-    double bestValue = fabs( orient2D( v0, v1, v2, AxisPair::X_Y ) );
-
-    AxisPair result  = AxisPair::X_Y;
-
-    if ( double candidateValue = fabs( orient2D( v0, v1, v2, AxisPair::X_Z ) ); candidateValue > bestValue ) {
-
-      result    = AxisPair::X_Z;
-      bestValue = candidateValue;
-    }
-
-    if ( double candidateValue = fabs( orient2D( v0, v1, v2, AxisPair::Y_Z ) ); candidateValue > bestValue ) {
-
-      bestValue = candidateValue;
-      result = AxisPair::Y_Z;
-    }
-
-    if ( bestValue == 0.0 ) {
-      result = AxisPair::NONE;
-    }
-
-    return result;
-  }
-
-  /** Will get the best 2D projection for a triangle that simply involves truncating an axis
-   *  As long as the triangle is non-zero area, given that orient2D is exact, it should
-   *  give us the truncated axis projection with the biggest area.
-   */
   inline AxisPair best_truncated_projection( const glm::dvec3 (&vertices)[3] ) {
 
-    return best_truncated_projection( vertices[ 0 ], vertices[ 1 ], vertices[ 2 ] );
+    return conway::best_truncated_projection( vertices[ 0 ], vertices[ 1 ], vertices[ 2 ] );
   }
 
   inline void extract_vertices(

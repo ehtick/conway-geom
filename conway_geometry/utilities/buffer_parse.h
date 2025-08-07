@@ -8,7 +8,6 @@
 #include <optional>
 #include "representation/Topology.h"
 
-
 namespace conway {
 
   size_t skip_comment( size_t cursor, const std::span< const uint8_t >& input );

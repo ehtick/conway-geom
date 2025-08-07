@@ -630,6 +630,7 @@ class ConwayGeometryProcessor {
     double radius;
     double radius2;
     ParamsGetIfcTrimmedCurve paramsGetIfcTrimmedCurve;
+    bool isEdge = false;
   };
 
   struct ParamsGetIfcLine {

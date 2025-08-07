@@ -1305,6 +1305,8 @@ EMSCRIPTEN_BINDINGS(my_module) {
                            ParamsGetIfcCircle::radius)
       .field("radius2", &conway::geometry::ConwayGeometryProcessor::
                            ParamsGetIfcCircle::radius2)
+      .field("isEdge", &conway::geometry::ConwayGeometryProcessor::
+                           ParamsGetIfcCircle::isEdge)
       .field("paramsGetIfcTrimmedCurve",
              &conway::geometry::ConwayGeometryProcessor::ParamsGetIfcCircle::
                  paramsGetIfcTrimmedCurve);

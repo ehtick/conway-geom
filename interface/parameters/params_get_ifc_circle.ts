@@ -10,4 +10,5 @@ export interface ParamsGetIfcCircle {
   radius: number
   radius2: number
   paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve
+  isEdge: boolean
 }

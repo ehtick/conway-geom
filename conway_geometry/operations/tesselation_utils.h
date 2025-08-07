@@ -7,18 +7,26 @@
 #include <queue>
 #include "representation/Geometry.h"
 #include "representation/IfcGeometryReps.h"
+#include "operations/math_utils.h"
 
+#if defined (_MSC_VER)
+
+#pragma warning( push )
+#pragma warning( disable : 26812 )
+
+#endif
+
+#include "CDT.h"
+
+
+#if defined (_MSC_VER)
+
+#pragma warning( pop )
+
+#endif
 
 namespace conway::geometry {
 
-  struct BoundaryLoop {
-
-    std::vector< glm::dvec3 > points;
-    std::vector< glm::dvec2 > parameterization;
-    std::vector< glm::dvec2 > points2D;
-    std::vector< uint32_t >   identities;
-
-  };
 
   /**
    * A UV parameterized vertex on 2 parameter surface.
@@ -89,18 +97,20 @@ namespace conway::geometry {
   /**
    * A candidate edge for splitting with the parameter vertex.
    */
+  template< typename VertexType > 
   struct CandidateEdge {
 
     double   deflection;
     uint32_t edge;
 
-    ParameterVertex vertex;
+    VertexType vertex;
   };
 
   /**
    * Sorting operator for candidate edge priority.
    */
-  inline bool operator<( const CandidateEdge& left, const CandidateEdge& right ) {
+  template < typename VertexType >
+  inline bool operator<( const CandidateEdge< VertexType >& left, const CandidateEdge< VertexType >& right ) {
 
     return ( left.deflection < right.deflection ) ||
       ( left.deflection == right.deflection && left.edge < right.edge );
@@ -144,6 +154,40 @@ namespace conway::geometry {
   }
 
   /**
+   * Append a winged edge mesh 
+   */
+  inline void appendMeshToGeometry( WingedEdgeMesh< glm::dvec3 >& mesh, Geometry& geometry ) {
+
+    uint32_t baseVertex = geometry.vertices.size();
+
+    geometry.vertices.reserve( geometry.vertices.size() + mesh.vertices.size() );
+    geometry.vertices.insert(
+      geometry.vertices.end(),
+      mesh.vertices.begin(),
+      mesh.vertices.end() );
+
+    for ( const ConnectedTriangle& triangle : mesh.triangles ) {   
+
+      uint32_t v0 = triangle.vertices[ 0 ];
+      uint32_t v1 = triangle.vertices[ 1 ];
+      uint32_t v2 = triangle.vertices[ 2 ];
+
+      if ( conway::orient2D(  
+        mesh.vertices[ v0 ],
+        mesh.vertices[ v1 ],
+        mesh.vertices[ v2 ]) < 0 ) {
+
+        std::swap( v0, v2 );
+      }
+
+      geometry.MakeTriangle(
+        baseVertex + v0,
+        baseVertex + v1,
+        baseVertex + v2 );
+    }
+  }
+
+  /**
    * Given a parameterized surface (UV)->(XYZ),
    * this will take a starting mesh with parameterized vertices and tesselate the internal triangles
    */
@@ -154,7 +198,7 @@ namespace conway::geometry {
     int32_t maximumTriangles,
     double minimumDeflection ) {
 
-    std::priority_queue< CandidateEdge > candidates;
+    std::priority_queue< CandidateEdge< ParameterVertex > > candidates;
 
     auto addCandidate = [&]( uint32_t edgeIndex ) {
 
@@ -181,7 +225,7 @@ namespace conway::geometry {
         return;
       }
 
-      candidates.push( CandidateEdge { 
+      candidates.push( CandidateEdge< ParameterVertex > { 
         deflection * glm::distance( v0.point, v1.point ),
         edgeIndex,
         ParameterVertex { newPoint, newUV } 
@@ -200,7 +244,8 @@ namespace conway::geometry {
 
     while ( !candidates.empty() && maximumTriangles > 0 ) {
 
-      const CandidateEdge& candidate    = candidates.top();
+      const CandidateEdge< ParameterVertex >& candidate = candidates.top();
+
       // copy edge because it mutates later
       // as may the references as the vector re-allocates.
       Edge                 edge         = mesh.edges[ candidate.edge ];
@@ -210,6 +255,92 @@ namespace conway::geometry {
       uint32_t             otherVertex0 = t0.otherVertex( edge );
       uint32_t             otherVertex1 = t1.otherVertex( edge );
       uint32_t             newVertex    = mesh.makeVertex( candidate.vertex );
+
+      candidates.pop();
+
+      mesh.deleteTriangle( edge.triangles[ 1 ] );
+      mesh.deleteTriangle( edge.triangles[ 0 ] );
+
+      mesh.makeTriangle( otherVertex0, edge.vertices[ 0 ], newVertex );
+      mesh.makeTriangle( newVertex, edge.vertices[ 1 ], otherVertex0 );
+      mesh.makeTriangle( newVertex, edge.vertices[ 0 ], otherVertex1 );
+      mesh.makeTriangle( otherVertex1, edge.vertices[ 1 ], newVertex );
+
+      addCandidate( mesh.getEdge( otherVertex0, newVertex ).value_or( EMPTY_INDEX ) );
+      addCandidate( mesh.getEdge( otherVertex1, newVertex ).value_or( EMPTY_INDEX ) );
+      addCandidate( mesh.getEdge( edge.vertices[ 0 ], newVertex ).value_or( EMPTY_INDEX ) );
+      addCandidate( mesh.getEdge( edge.vertices[ 1 ], newVertex ).value_or( EMPTY_INDEX ) );
+
+      maximumTriangles -= 2;
+    }
+  }
+
+  /**
+   * Given a surface where a mid-point can be re-computed as point on the surface,
+   * this will take a starting mesh with parameterized vertices and tesselate the internal triangles
+   */
+  template< typename SurfacePointFunction >
+  inline void tesselate(
+    WingedEdgeMesh< glm::dvec3 >& mesh,
+    SurfacePointFunction surface,
+    int32_t maximumTriangles,
+    double minimumDeflection ) {
+
+    std::priority_queue< CandidateEdge< glm::dvec3 > > candidates;
+
+    auto addCandidate = [&]( uint32_t edgeIndex ) {
+
+      if ( edgeIndex == EMPTY_INDEX  ) {
+        return;
+      }
+
+      const Edge& edge = mesh.edges[ edgeIndex ];
+
+      if ( edge.border() ) {
+        return;
+      }
+
+      const glm::dvec3& v0   = mesh.vertices[ edge.vertices[ 0 ] ];
+      const glm::dvec3& v1   = mesh.vertices[ edge.vertices[ 1 ] ];
+
+      glm::dvec3 averagePoint = ( v0 + v1 ) * 0.5;
+      glm::dvec3 newPoint     = surface( averagePoint );
+
+      double deflection = glm::distance( averagePoint, newPoint );
+
+      if ( minimumDeflection > deflection ) {
+        return;
+      }
+
+      candidates.push( ( CandidateEdge< glm::dvec3 > { 
+        deflection * glm::distance( v0, v1 ),
+        edgeIndex,
+        newPoint 
+      } ) );      
+    };
+
+    for (
+      uint32_t edgeIndex = 0, end = static_cast< uint32_t >( mesh.edges.size() );
+      edgeIndex < end;
+      ++edgeIndex ) {
+
+      addCandidate( edgeIndex );
+    }
+
+    maximumTriangles -= mesh.triangles.size();
+
+    while ( !candidates.empty() && maximumTriangles > 0 ) {
+
+      const CandidateEdge< glm::dvec3 >&    candidate = candidates.top();
+      // copy edge because it mutates later
+      // as may the references as the vector re-allocates.
+      Edge                     edge         = mesh.edges[ candidate.edge ];
+
+      const ConnectedTriangle& t0           = mesh.triangles[ edge.triangles[ 0 ] ];
+      const ConnectedTriangle& t1           = mesh.triangles[ edge.triangles[ 1 ] ];
+      uint32_t                 otherVertex0 = t0.otherVertex( edge );
+      uint32_t                 otherVertex1 = t1.otherVertex( edge );
+      uint32_t                 newVertex    = mesh.makeVertex( candidate.vertex );
 
       candidates.pop();
 

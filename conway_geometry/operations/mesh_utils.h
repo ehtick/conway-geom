@@ -17,6 +17,7 @@
 
 #include "geometry_utils.h"
 #include "tesselation_utils.h"
+#include "manifold_utils.h"
 
 #define CONST_PI 3.141592653589793238462643383279502884L
 
@@ -183,6 +184,427 @@ inline void TriangulateRevolution(Geometry &geometry,
       geometry.MakeTriangle( c, b, d );
     }
   }
+}
+
+
+// TODO: review and simplify
+inline void TriangulateSphericalSurface(Geometry &geometry,
+                                        const std::vector<IfcBound3D> &bounds,
+                                        IfcSurface &surface) {
+  if ( bounds.empty() ) {
+    return;
+  }
+
+  double     radius = surface.SphericalSurface.Radius;
+  glm::dvec3 cent   = surface.transformation[3];
+  glm::dvec3 vecX   = glm::normalize(surface.transformation[0]);
+  glm::dvec3 vecY   = glm::normalize(surface.transformation[1]);
+  glm::dvec3 vecZ   = glm::normalize(surface.transformation[2]);
+
+  WingedEdgeMesh< glm::dvec3 > mesh;
+
+  tesselateDualParametrization(
+    mesh,
+    bounds,
+    [&]( const glm::dvec3& point ) {
+      // Produce a normalized vector from the centroid to the point.
+      glm::dvec3 deltaCentroid = glm::normalize( point - cent );
+
+      // we can normalize first because rotation is invariant
+      // relative the centroid
+      double dx = glm::dot( vecX, deltaCentroid );
+      double dy = glm::dot( vecY, deltaCentroid );
+      double dz = glm::dot (vecZ, deltaCentroid );
+
+      // Project the point onto the unit sphere surface
+      return glm::normalize( glm::dvec3( dx, dy, dz ) );
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 + normalFormVertex.z );
+
+      if ( 2.0 - z < DBL_EPSILON ) {
+        return glm::dvec2( 4, 4 );
+      }
+
+      return glm::normalize( glm::dvec2( normalFormVertex ) ) * z;
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 - normalFormVertex.z );
+
+      if ( 2.0 - z < DBL_EPSILON ) {
+        return glm::dvec2( 4, 4 );
+      }
+
+      return glm::normalize( glm::dvec2( normalFormVertex ) ) * z;
+    },
+    []( const glm::dvec3& normalFormVertex ) {
+
+      return ( normalFormVertex.z <= 0.0 ) ? 0 : 1;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+      if ( normalFormVertex1.z <= 0.0 && normalFormVertex2.z <= 0.0 ) {
+        return false;
+      }
+
+      if ( normalFormVertex1.z > ( 1.0 - DBL_EPSILON ) || normalFormVertex2.z > ( 1.0 - DBL_EPSILON ) ) {
+        return true;
+      }
+
+      return glm::distance( paramVertex1, paramVertex2 ) > 1.0;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+        if ( normalFormVertex1.z > 0.0 && normalFormVertex2.z > 0.0 ) {
+          return false;
+        }
+
+        if ( normalFormVertex1.z < ( -1.0 + DBL_EPSILON ) || normalFormVertex2.z < ( -1.0 + DBL_EPSILON ) ) {
+          return true;
+        }
+
+        return glm::distance( paramVertex1, paramVertex2 ) > 1.0;
+    } );
+
+  tesselate(
+    mesh,
+    [&]( const glm::dvec3& point ) { 
+      
+      return glm::normalize( point - cent ) * radius + cent;
+    },
+    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+    MAX_DEFLECTION );
+
+  appendMeshToGeometry( mesh, geometry );
+}
+
+
+// TODO: review and simplify
+inline void TriangulateToroidalSurface(
+    Geometry &geometry,
+    const std::vector<IfcBound3D> &bounds,
+    IfcSurface &surface) {
+
+  if ( bounds.empty() ) {
+    return;
+  }
+
+  double     majorRadius = surface.ToroidalSurface.MajorRadius;
+  double     minorRadius = surface.ToroidalSurface.MinorRadius;
+  glm::dvec3 cent        = surface.transformation[3];
+  glm::dvec3 vecX        = glm::normalize(surface.transformation[0]);
+  glm::dvec3 vecY        = glm::normalize(surface.transformation[1]);
+  glm::dvec3 vecZ        = glm::normalize(surface.transformation[2]);
+
+  WingedEdgeMesh< glm::dvec3 > mesh;
+
+  tesselateDualParametrization(
+    mesh,
+    bounds,
+    [&]( const glm::dvec3& point ) {
+
+      // Produce a normalized vector from the centroid to the point.
+      glm::dvec3 deltaCentroid = point - cent;
+
+      // we can normalize first because rotation is invariant
+      // relative the centroid
+      double dx = glm::dot( vecX, deltaCentroid );
+      double dy = glm::dot( vecY, deltaCentroid );
+      double dz = glm::dot (vecZ, deltaCentroid );
+
+      glm::dvec2 planar = glm::normalize( glm::dvec2( dx, dy ) );
+
+      glm::dvec3 normalRingCentre = 
+        glm::dvec3( 
+          glm::normalize( planar ),
+          0.0 );
+
+      // Centroid on the ring.
+      glm::dvec3 ringCenter =
+        normalRingCentre * majorRadius;
+
+      glm::dvec3 normalPointOnRing = glm::normalize( glm::dvec3( dx, dy, dz ) - ringCenter );
+
+      // Project the point onto the unit sphere surface
+      return ( normalRingCentre * 3.0 ) + normalPointOnRing;
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 + normalFormVertex.z );
+
+      glm::dvec2 originalPlanar   = glm::dvec2( normalFormVertex );
+      glm::dvec2 normalRingCentre = glm::normalize( originalPlanar );
+
+      // Range [-2, 2], ring is radiug 1.5 +/- 0.5 (inner hole is 1.0, outer ring is 2)
+      return normalRingCentre * ( 1.0 + z * 0.5 );
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 - normalFormVertex.z );
+
+      glm::dvec2 originalPlanar   = glm::dvec2( normalFormVertex );
+      glm::dvec2 normalRingCentre = glm::normalize( originalPlanar );
+
+      // Range [-2, 2], ring is radiug 1.5 +/- 0.5 (inner hole is 1.0, outer ring is 2)
+      return normalRingCentre * ( 1.0 + z * 0.5 );
+    },
+    []( const glm::dvec3& normalFormVertex ) {
+
+      return ( normalFormVertex.z <= 0.0 ) ? 0 : 1;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+      if ( normalFormVertex1.z <= 0.0 && normalFormVertex2.z <= 0.0 ) {
+        return false;
+      }
+
+      return glm::distance( paramVertex1, paramVertex2 ) > 0.5;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+        if ( normalFormVertex1.z >= 0.0 && normalFormVertex2.z >= 0.0 ) {
+          return false;
+        }
+
+        return glm::distance( paramVertex1, paramVertex2 ) > 0.5;
+    } );
+
+  tesselate(
+    mesh,
+    [&]( const glm::dvec3& point ) { 
+     
+      // Produce a normalized vector from the centroid to the point.
+      glm::dvec3 deltaCentroid = point - cent;
+
+      // we can normalize first because rotation is invariant
+      // relative the centroid
+      double dx = glm::dot( vecX, deltaCentroid );
+      double dy = glm::dot( vecY, deltaCentroid );
+      double dz = glm::dot (vecZ, deltaCentroid );
+
+      glm::dvec2 planar = glm::normalize( glm::dvec2( dx, dy ) );
+
+      // Centroid on the ring.
+      glm::dvec3 ringCenter =
+        glm::dvec3( glm::normalize( planar ) * majorRadius, 0.0 );
+
+      glm::dvec3 normalPointOnRing = glm::normalize( glm::dvec3( dx, dy, dz ) - ringCenter );
+
+      glm::dvec3 pointOnIdentityRing = ringCenter + ( normalPointOnRing * minorRadius );
+     
+      // Move back to the original coordinate frame.
+      return
+        vecX * pointOnIdentityRing.x +
+        vecY * pointOnIdentityRing.y +
+        vecZ * pointOnIdentityRing.z + cent;
+    },
+    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+    MAX_DEFLECTION );
+
+  appendMeshToGeometry( mesh, geometry );
+}
+
+
+// TODO: review and simplify
+inline void TriangulateConicalSurface(
+  Geometry &geometry,
+  const std::vector<IfcBound3D> &bounds,
+  IfcSurface &surface) {
+  // First we get the cylinder data
+
+  if ( bounds.empty() ) {
+    return;
+  }
+
+  double radius    = surface.ConicalSurface.Radius;
+  double semiAngle = surface.ConicalSurface.SemiAngle;
+
+  printf( "Conical surface radius: %f, semiAngle: %f\n", radius, semiAngle );
+
+  double sinSemiAngle = tan( fabs( semiAngle ) );
+  
+  glm::dvec3 cent = surface.transformation[3];
+  glm::dvec3 vecX = glm::normalize(surface.transformation[0]);
+  glm::dvec3 vecY = glm::normalize(surface.transformation[1]);
+  glm::dvec3 vecZ = glm::normalize(surface.transformation[2]);
+
+  std::vector<std::vector<glm::dvec3>> newPoints;
+
+  double minR = DBL_MAX;
+  double maxR = -DBL_MAX;
+
+  std::priority_queue< std::pair< double, size_t > > outsideMostBoundaries;
+
+  // Find the relative coordinates of each curve point in the cylinder reference
+  // plane Only retain the max and min relative Z
+  for (size_t i = 0; i < bounds.size(); i++) {
+
+    double localMaxR = -DBL_MAX;
+    double localMinR = DBL_MAX;
+
+    for (size_t j = 0; j < bounds[i].curve.points.size(); j++) {
+
+      glm::dvec3 pt = bounds[ i ].curve.points[ j ];
+      glm::dvec3 vv = pt - cent;
+
+      double dx = glm::dot(vecX, vv);
+      double dy = glm::dot(vecY, vv);
+
+      //					double dx = glm::dot(vecX, vv);
+      //					double dy = glm::dot(vecY, vv);
+      double dr = glm::length( glm::dvec2( dx, dy ) );
+      
+      localMaxR = std::max( localMaxR, dr );
+      localMinR = std::min( localMinR, dr );
+    }
+
+    outsideMostBoundaries.push( std::make_pair( localMaxR, i ) );
+
+    maxR = std::max( maxR, localMaxR );
+    minR = std::min( minR, localMinR );
+  }
+
+  using Point = std::array<double, 2>;
+  std::vector<std::vector<Point>> uvBoundaryValues;
+  std::vector<ParameterVertex> vertices;
+
+  WingedEdgeMesh< ParameterVertex > mesh;
+
+  while ( !outsideMostBoundaries.empty() ) {
+
+    std::vector<Point> points;
+
+    size_t boundsIndex = outsideMostBoundaries.top().second;
+
+    outsideMostBoundaries.pop();
+
+    for (size_t j = 0; j < bounds[ boundsIndex ].curve.points.size(); j++) {
+
+      glm::dvec3 pt = bounds[ boundsIndex ].curve.points[ j ];
+      glm::dvec3 vv = pt - cent;
+
+      double dx = glm::dot(vecX, vv);
+      double dy = glm::dot(vecY, vv);
+      double dz = glm::dot(vecZ, vv);
+
+      glm::dvec2 pInv = glm::dvec2( dx, dy ) / maxR;
+
+      points.push_back({pInv.x, pInv.y});
+      mesh.makeVertex( { pt, pInv } );
+    }
+
+    uvBoundaryValues.push_back( points );
+  }
+
+#if (OUTPUT_SVG_DEBUG == 1) 
+
+    static size_t svgIndex = 0;
+
+    size_t outputIndex = svgIndex++;
+
+    std::ofstream svgFile( "cone_" + std::to_string( outputIndex ) + ".svg" );
+
+    auto svgScale = []( double value ) {
+
+      return 50 + ( 1024.0 * ( value + 1.0 ) / 2.0 ); 
+
+    };
+
+    svgFile << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+              << "width=\"1124\" height=\"1124\">\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"512\" style=\"stroke:rgb(255, 132, 0);stroke-width:2\" fill=\"none\"/>\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"256\" style=\"stroke:rgb(0, 0, 255);stroke-width:2\" fill=\"none\"/>\n";
+
+    for ( const std::vector< Point >& loop  : uvBoundaryValues )
+    {
+      bool firstInLoop = true;
+      
+      glm::dvec2 lastPoint;
+
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+
+        if ( firstInLoop )
+        {
+          svgFile << "<polyline points=\"";
+          firstInLoop = false;
+        }
+        else
+        {
+          svgFile << " ";
+        }
+
+        svgFile << svgScale( svgPoint.x ) << "," << svgScale( svgPoint.y );
+
+        lastPoint = svgPoint;
+      }
+
+      svgFile << "\" style=\"fill:none;stroke:rgb(0,0,0);stroke-width:2\" />\n";
+      
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+        
+        svgFile << "<circle cx=\"" << svgScale( svgPoint.x ) << "\" cy=\"" << svgScale( svgPoint.y )
+            << "\" r=\"3\" fill=\"red\"/>\n";
+      }
+    }
+
+    svgFile << "</svg>\n";
+
+    svgFile.close();
+
+#endif
+
+  // Triangulate projected boundary
+  // Subdivide resulting triangles to increase definition
+  // r indicates the level of subdivision, currently 3 you can increase it to
+  // 5
+
+  std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+
+  for (size_t i = 0; i < indices.size(); i += 3) {
+
+    mesh.makeTriangle( 
+      indices[ i  + 0 ], 
+      indices[ i  + 1 ], 
+      indices[ i  + 2 ] );
+  }
+
+  tesselate(
+    mesh,
+    [&]( const glm::dvec3& point, [[maybe_unused]]const glm::dvec2& from ) { 
+      
+      glm::dvec3 vv = point - cent;
+      double     dz = glm::dot( vecZ, vv );
+
+      glm::dvec3 coneSpacePoint = glm::dvec3( ( radius + dz * sinSemiAngle ) * glm::normalize( glm::dvec2( vv ) ), dz );
+
+      return cent + coneSpacePoint.x * vecX + coneSpacePoint.y * vecY + coneSpacePoint.z * vecZ;
+    },
+    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+    MAX_DEFLECTION );
+
+  appendMeshToGeometry( mesh, geometry );
 }
 
 // TODO: review and simplify

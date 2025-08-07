@@ -582,11 +582,19 @@ void ConwayGeometryProcessor::AddFaceToGeometry(
       auto surface = parameters.surface;
 
       if (surface.BSplineSurface.Active) {
-        TriangulateBspline(geometry, parameters.boundsArray, surface,
-                           parameters.scaling);
+         TriangulateBspline(geometry, parameters.boundsArray, surface,
+                            parameters.scaling);
       } else if (surface.CylinderSurface.Active) {
-        TriangulateCylindricalSurface(geometry, parameters.boundsArray,
-                                      surface);
+         TriangulateCylindricalSurface(geometry, parameters.boundsArray,
+                                       surface);
+      } else if (surface.SphericalSurface.Active) {
+        TriangulateSphericalSurface(geometry, parameters.boundsArray,
+                                    surface);      
+      } else if (surface.ToroidalSurface.Active) {
+       TriangulateToroidalSurface(geometry, parameters.boundsArray,
+                                   surface);
+      } else if (surface.ConicalSurface.Active) {
+        TriangulateConicalSurface(geometry, parameters.boundsArray, surface);
       } else if (surface.RevolutionSurface.Active) {
         TriangulateRevolution(geometry, parameters.boundsArray, surface);
       } else if (surface.ExtrusionSurface.Active) {
@@ -2326,8 +2334,15 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
     lengthDegrees = endDegrees - startDegrees;
   }
 
-  if ( startOffset != 0 ) {
-
+  if ( parameters.paramsGetIfcTrimmedCurve.trimExists &&
+       parameters.paramsGetIfcTrimmedCurve.senseAgreement &&
+       parameters.isEdge ) {
+    // if this is an edge, we reverse the curve
+    
+      
+    lengthDegrees = -lengthDegrees;
+    
+    std::swap(startDegrees, endDegrees);
   }
 
   double startRad = degreesToRadians(startDegrees);
@@ -2381,6 +2396,13 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
     } else {
       curve.Add3d(parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D);
     }
+  }
+
+  if ( parameters.paramsGetIfcTrimmedCurve.trimExists && 
+       parameters.paramsGetIfcTrimmedCurve.senseAgreement &&
+       parameters.isEdge ) {
+    // if this is an edge, we reverse the curve
+    std::reverse(curve.points.begin(), curve.points.end());
   }
 
   return curve;

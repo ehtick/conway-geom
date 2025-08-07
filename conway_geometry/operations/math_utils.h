@@ -194,6 +194,57 @@ namespace conway {
     return 0;
   }
 
+  
+  /** Will get the best 2D projection for a triangle that simply involves truncating an axis
+   *  As long as the triangle is non-zero area, given that orient2D is exact, it should
+   *  give us the truncated axis projection with the biggest area.
+   */
+  inline AxisPair best_truncated_projection( const glm::dvec3& v0, const glm::dvec3& v1, const glm::dvec3& v2 ) {
+
+    double bestValue = fabs( orient2D( v0, v1, v2, AxisPair::X_Y ) );
+
+    AxisPair result  = AxisPair::X_Y;
+
+    if ( double candidateValue = fabs( orient2D( v0, v1, v2, AxisPair::X_Z ) ); candidateValue > bestValue ) {
+
+      result    = AxisPair::X_Z;
+      bestValue = candidateValue;
+    }
+
+    if ( double candidateValue = fabs( orient2D( v0, v1, v2, AxisPair::Y_Z ) ); candidateValue > bestValue ) {
+
+      bestValue = candidateValue;
+      result = AxisPair::Y_Z;
+    }
+
+    if ( bestValue == 0.0 ) {
+      result = AxisPair::NONE;
+    }
+
+    return result;
+  }
+
+  /**
+   * Get the sign of the determinant in the 2D plane of the largest component of the triangle.
+   */
+  inline int32_t orient2D(const glm::dvec3& v0, const glm::dvec3& v1, const glm::dvec3& v2, double tolerance = 0 ) {
+
+    AxisPair axes        = best_truncated_projection( v0, v1, v2 );
+    double   orientation = orient2D( v0, v1, v2, axes );
+    
+    if ( orientation > tolerance ) {
+
+      return 1;
+    }
+
+    if ( orientation < tolerance ) {
+
+      return -1;
+    }
+
+    return 0;
+  }
+
   /** Get the sign of the determinant for a pair of axes for a 3D triangle (i.e. a 2D triangle with an axis aligned ortho projection) */
   inline int32_t orient2D( const glm::dvec3(&vertices)[ 3 ], AxisPair axes, double tolerance = 0 ) {
 
@@ -271,8 +322,7 @@ namespace conway {
 
     return 2.0 * fast_atan2( y, x );
   }
-
-  
+    
   /**
    * Simple determininant based comparison given 4 points that will calculate 3 vectors relative to the first and then
    * work out the sign of the determinant within tolerance (-1 for negative, 0 for within tolerance of 0 and 1 for positive)
