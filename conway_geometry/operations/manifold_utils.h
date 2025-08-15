@@ -15,6 +15,8 @@
 #include <unordered_set>
 #include <unordered_map>
 
+#include "representation/Geometry.h"
+
 #if defined(_MSC_VER)
 
 #pragma warning(push)
@@ -61,6 +63,236 @@ namespace conway::geometry
     std::vector<glm::dvec3> normalFormVertices;
     std::vector<LoopEdge> loopEdges;
   };
+
+
+  template <
+      typename ParameterizationFunction
+      >
+  inline void tesselatePlane(
+      Geometry& output,
+      const std::vector< IfcBound3D > &boundaries,
+      ParameterizationFunction parameterization )
+  {
+    LoopEdgeMesh boundaryMesh;
+
+    VertexMap               &vertexMap          = boundaryMesh.vertexMap;
+    std::vector<glm::dvec3> &vertices           = output.vertices;
+    std::vector< LoopEdge > &loopEdges          = boundaryMesh.loopEdges;
+
+     // Build connected edge structure with unique vertices from boundary loops.
+    for ( const IfcBound3D &boundary : boundaries )
+    {
+      const std::vector<glm::dvec3> &points =
+          boundary.curve.points;
+
+      bool     firstVertexInLoop   = true;
+      uint32_t previousVertexIndex = 0;
+      uint32_t firstIndexInLoop    = 0;
+
+      for ( const glm::dvec3 &point : points )
+      {
+        auto foundVertex = vertexMap.find( point );
+
+        uint32_t vertexIndex = 0;
+
+        if ( foundVertex == vertexMap.end() )
+        {
+          vertexIndex = static_cast< uint32_t >( vertices.size() );
+
+          vertices.push_back( point );
+
+          vertexMap[ point ] = vertexIndex;
+        }
+        else
+        {
+          vertexIndex = foundVertex->second;
+        }
+
+        if ( firstVertexInLoop )
+        {
+          previousVertexIndex = vertexIndex;
+          firstIndexInLoop    = vertexIndex;
+          firstVertexInLoop   = false;
+          continue;
+        }
+
+        if ( previousVertexIndex == vertexIndex )
+        {
+          continue;
+        }
+
+        loopEdges.emplace_back( previousVertexIndex, vertexIndex );
+
+        previousVertexIndex = vertexIndex;
+      }
+
+      if ( previousVertexIndex != firstIndexInLoop )
+      {
+        loopEdges.emplace_back( previousVertexIndex, firstIndexInLoop );
+      }
+    }
+
+    std::vector< glm::dvec2 > parameterizationVertices;
+
+    size_t vertexCount = vertices.size();
+
+    parameterizationVertices.reserve( vertexCount );
+
+    for ( const glm::dvec3 &vertex : vertices )
+    {
+      parameterizationVertices.emplace_back( parameterization( vertex ) );
+    }
+
+    std::vector< CDT::Edge >      cdtEdges;
+    std::vector<uint32_t>         vertexRemapping;
+    std::vector<uint32_t>         reverseVertexRemapping(
+      vertexCount,
+      EMPTY_INDEX );
+    std::vector< CDT::V2d< double > > cdtVertices;
+
+    vertexRemapping.reserve( vertexCount );
+    cdtVertices.reserve( vertexCount );
+
+    // Setup constraints, discard illegal edges and remap vertices for CDT.
+    for ( const LoopEdge &loopEdge : boundaryMesh.loopEdges )
+    {
+      auto [ v1, v2 ] = loopEdge;
+
+      const glm::dvec2 &param1 = parameterizationVertices[ v1 ];
+      const glm::dvec2 &param2 = parameterizationVertices[ v2 ];
+
+      uint32_t remappedV1 = reverseVertexRemapping[ v1 ];
+      uint32_t remappedV2 = reverseVertexRemapping[ v2 ];
+
+      if ( remappedV1 == EMPTY_INDEX )
+      {
+        remappedV1 = static_cast<uint32_t>( cdtVertices.size() );
+
+        vertexRemapping.push_back( v1 );
+
+        reverseVertexRemapping[ v1 ] = remappedV1;
+
+        cdtVertices.emplace_back( param1.x, param1.y );
+      }
+
+      if ( remappedV2 == EMPTY_INDEX )
+      {
+        remappedV2 = static_cast< uint32_t >( cdtVertices.size() );
+
+        vertexRemapping.push_back( v2 );
+
+        reverseVertexRemapping[ v2 ] = remappedV2;
+
+        cdtVertices.emplace_back( param2.x, param2.y );
+      }
+
+      cdtEdges.emplace_back( remappedV1, remappedV2 );
+    }
+
+    static uint32_t svgIndex = 0;
+
+    uint32_t outputIndex = svgIndex++;
+
+#if (OUTPUT_SVG_DEBUG == 1)
+
+    std::ofstream svgFile( "planar_" + std::to_string( outputIndex ) + ".svg" );
+
+    auto svgScale = []( double value ) {
+
+      return 50 + ( 1024.0 * ( value + 2.0 ) / 4.0 ); 
+
+    };
+
+    svgFile << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+              << "width=\"1124\" height=\"1124\">\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"512\" style=\"stroke:rgb(255, 132, 0);stroke-width:2\" fill=\"none\"/>\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"256\" style=\"stroke:rgb(0, 0, 255);stroke-width:2\" fill=\"none\"/>\n";
+
+    for ( const CDT::Edge &edge : cdtEdges )
+    {
+      const CDT::V2d< double > &v1 = cdtVertices[ edge.v1() ];
+      const CDT::V2d< double > &v2 = cdtVertices[ edge.v2() ];
+
+      svgFile << "<line x1=\"" << svgScale( v1.x ) << "\" y1=\"" << svgScale( v1.y )
+              << "\" x2=\"" << svgScale( v2.x ) << "\" y2=\"" << svgScale( v2.y )
+              << "\" style=\"stroke:rgb(0,0,0);stroke-width:2\" />\n";
+    }
+    
+    for ( uint32_t vertexIndex = 0; vertexIndex < cdtVertices.size(); ++vertexIndex )
+    {
+      const CDT::V2d< double > &vertex       = cdtVertices[ vertexIndex ];
+
+      svgFile << "<circle cx=\"" << svgScale( vertex.x ) << "\" cy=\"" << svgScale( vertex.y )
+              << "\" r=\"4\" fill=\"red\" />\n";
+    }
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"4\" fill=\"green\" />\n";
+
+    svgFile << "</svg>\n";
+
+    svgFile.close();
+
+#endif
+
+    // No edges to process, return early.
+    if ( cdtEdges.empty() )
+    {
+      return;
+    }
+
+    CDT::Triangulation< double > triangulation(
+      CDT::VertexInsertionOrder::AsProvided,
+      CDT::IntersectingConstraintEdges::NotAllowed, 0);
+
+    try
+    {
+      triangulation.insertVertices( cdtVertices );
+      triangulation.insertEdges( cdtEdges );
+
+      triangulation.eraseOuterTrianglesAndHoles();
+    }
+    catch (const CDT::IntersectingConstraintsError &e) {
+
+      const CDT::V2d< double >& ev1 = cdtVertices[ e.e1().v1() ];
+      const CDT::V2d< double >& ev2 = cdtVertices[ e.e1().v2() ];
+      const CDT::V2d< double >& ev3 = cdtVertices[ e.e2().v1() ];
+      const CDT::V2d< double >& ev4 = cdtVertices[ e.e2().v2() ];
+
+      Logger::logError( "CDT Exception (plane svg: %d) ((%f,%f),(%f,%f)) -> ((%f,%f),(%f,%f)): %s", outputIndex, ev1.x, ev1.y, ev2.x, ev2.y, ev3.x, ev3.y, ev4.x, ev4.y, e.what() );
+      return;
+    }
+    catch (const CDT::Error &e)
+    {
+      Logger::logError( "CDT Exception (plane svg: %d): %s", outputIndex, e.what() );
+      return;
+    }
+
+    const CDT::TriangleVec &triangles = triangulation.triangles;
+
+    for ( const CDT::Triangle &triangle : triangles )
+    {
+      auto [ cdtv1, cdtv2, cdtv3 ] = triangle.vertices;
+
+      if (
+        cdtv1 == cdtv2 ||
+        cdtv2 == cdtv3 ||
+        cdtv3 == cdtv1 )
+      {
+        continue;
+      }
+
+      uint32_t v1 = vertexRemapping[ cdtv1 ];
+      uint32_t v2 = vertexRemapping[ cdtv2 ];
+      uint32_t v3 = vertexRemapping[ cdtv3 ];
+
+      output.MakeTriangle( v1, v2, v3 );
+    }
+  }  
 
   template <
       typename ParameterizationFunction,
@@ -194,10 +426,13 @@ namespace conway::geometry
               << "\" style=\"stroke:rgb(0,0,0);stroke-width:2\" />\n";
     }
     
-    for ( const CDT::V2d< double > &vertex : cdtVertices )
+    for ( uint32_t vertexIndex = 0; vertexIndex < cdtVertices.size(); ++vertexIndex )
     {
+      const CDT::V2d< double > &vertex       = cdtVertices[ vertexIndex ];
+      const glm::dvec3         &normalVertex = normalFormVertices[ vertexRemapping[ vertexIndex ] ];
+
       svgFile << "<circle cx=\"" << svgScale( vertex.x ) << "\" cy=\"" << svgScale( vertex.y )
-              << "\" r=\"4\" fill=\"red\" />\n";
+              << "\" r=\"4\" fill=\"red\" /> <!-- " << normalVertex.x << ", " << normalVertex.y << ", " << normalVertex.z << " -->\n";
     }
 
     svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
@@ -306,11 +541,6 @@ namespace conway::geometry
 
       outputMesh.makeTriangle( v1, v2, v3 );
     }
-
-    // printf( "Finished hemisphere %d, %d triangles, %d edges\n",
-    //         expectedEquatorSide,
-    //         static_cast< int >( outputMesh.triangles.size() ),
-    //         static_cast< int >( outputMesh.edges.size() ) );
   }
 
   template <
@@ -433,7 +663,6 @@ namespace conway::geometry
     cdtVertices.reserve( vertexCount );
 
     std::vector<glm::dvec2> &parameterization1Vertices = side0.vertices;
-    std::vector<glm::dvec2> &parameterization2Vertices = side1.vertices;
 
     for ( const Triangle &triangle : side0.triangles )
     {
@@ -644,8 +873,6 @@ namespace conway::geometry
      ++triangleIndex )
     {
       const ConnectedTriangle& triangle = output.triangles[ triangleIndex ];
-
-      bool triangleHaBoundaryOffLoop = false;
 
       for ( uint32_t edgeInTriangle = 0; edgeInTriangle < 3; ++edgeInTriangle )
       {

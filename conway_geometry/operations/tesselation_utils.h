@@ -136,7 +136,6 @@ namespace conway::geometry {
 
     }
 
-
     for ( size_t vertexIndex = 0, end = mesh.vertices.size(); vertexIndex < end; ++vertexIndex ) {
 
       // Note, we have to have local versions of vertex and normal
@@ -219,7 +218,9 @@ namespace conway::geometry {
       glm::dvec2 newUV        = ( v0.uv + v1.uv ) * 0.5;
       glm::dvec3 newPoint     = surface( averagePoint, newUV );
 
-      double deflection = glm::distance( averagePoint, newPoint );
+      glm::dvec3 deltaNewPoint = newPoint - averagePoint;
+
+      double deflection = glm::dot( deltaNewPoint, deltaNewPoint );
 
       if ( minimumDeflection > deflection ) {
         return;
@@ -248,18 +249,23 @@ namespace conway::geometry {
 
       // copy edge because it mutates later
       // as may the references as the vector re-allocates.
-      Edge                 edge         = mesh.edges[ candidate.edge ];
-
-      const ConnectedTriangle&      t0           = mesh.triangles[ edge.triangles[ 0 ] ];
-      const ConnectedTriangle&      t1           = mesh.triangles[ edge.triangles[ 1 ] ];
-      uint32_t             otherVertex0 = t0.otherVertex( edge );
-      uint32_t             otherVertex1 = t1.otherVertex( edge );
-      uint32_t             newVertex    = mesh.makeVertex( candidate.vertex );
+      Edge                     edge         = mesh.edges[ candidate.edge ];
+      const ConnectedTriangle& t0           = mesh.triangles[ edge.triangles[ 0 ] ];
+      const ConnectedTriangle& t1           = mesh.triangles[ edge.triangles[ 1 ] ];
+      uint32_t                 otherVertex0 = t0.otherVertex( edge );
+      uint32_t                 otherVertex1 = t1.otherVertex( edge );
+      uint32_t                 newVertex    = mesh.makeVertex( candidate.vertex );
 
       candidates.pop();
 
-      mesh.deleteTriangle( edge.triangles[ 1 ] );
-      mesh.deleteTriangle( edge.triangles[ 0 ] );
+      auto [ t0Index, t1Index ] = edge.triangles;
+
+      if ( t0Index > t1Index ) {
+        std::swap( t0Index, t1Index );
+      }
+
+      mesh.deleteTriangle( t1Index );
+      mesh.deleteTriangle( t0Index );
 
       mesh.makeTriangle( otherVertex0, edge.vertices[ 0 ], newVertex );
       mesh.makeTriangle( newVertex, edge.vertices[ 1 ], otherVertex0 );
@@ -306,7 +312,9 @@ namespace conway::geometry {
       glm::dvec3 averagePoint = ( v0 + v1 ) * 0.5;
       glm::dvec3 newPoint     = surface( averagePoint );
 
-      double deflection = glm::distance( averagePoint, newPoint );
+      glm::dvec3 deltaNewPoint = newPoint - averagePoint;
+
+      double deflection = glm::dot( deltaNewPoint, deltaNewPoint );
 
       if ( minimumDeflection > deflection ) {
         return;
@@ -344,8 +352,14 @@ namespace conway::geometry {
 
       candidates.pop();
 
-      mesh.deleteTriangle( edge.triangles[ 1 ] );
-      mesh.deleteTriangle( edge.triangles[ 0 ] );
+      auto [ t0Index, t1Index ] = edge.triangles;
+
+      if ( t0Index > t1Index ) {
+        std::swap( t0Index, t1Index );
+      }
+
+      mesh.deleteTriangle( t1Index );
+      mesh.deleteTriangle( t0Index );
 
       mesh.makeTriangle( otherVertex0, edge.vertices[ 0 ], newVertex );
       mesh.makeTriangle( newVertex, edge.vertices[ 1 ], otherVertex0 );

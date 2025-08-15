@@ -112,8 +112,15 @@ size_t IfcCurve::GetPointsSize() const {
 glm::dvec3 IfcCurve::Get3d(size_t i) const { return points.at(i); }
 
 bool IfcCurve::Add3d( const glm::dvec3& pt) {
-   if ( points.empty() || pt != points.back() ) {
-    points.push_back(pt);
+
+  glm::dvec3 point = pt;
+
+  point *= exp2( 24 );
+  point = glm::round( point );
+  point *= exp2( -24 );
+
+   if ( points.empty() || point != points.back() ) {
+    points.push_back( point );
     return true;
   }
 

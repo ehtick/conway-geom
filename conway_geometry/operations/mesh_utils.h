@@ -23,7 +23,7 @@
 
 namespace conway::geometry {
 
-constexpr double MAX_DEFLECTION            = 0.001;
+constexpr double MAX_DEFLECTION            = 0.000001;
 constexpr double MAX_TRIANGLE_AMPLIFACTION = 32;
 
 
@@ -433,8 +433,6 @@ inline void TriangulateConicalSurface(
   double radius    = surface.ConicalSurface.Radius;
   double semiAngle = surface.ConicalSurface.SemiAngle;
 
-  printf( "Conical surface radius: %f, semiAngle: %f\n", radius, semiAngle );
-
   double sinSemiAngle = tan( fabs( semiAngle ) );
   
   glm::dvec3 cent = surface.transformation[3];
@@ -595,9 +593,11 @@ inline void TriangulateConicalSurface(
     [&]( const glm::dvec3& point, [[maybe_unused]]const glm::dvec2& from ) { 
       
       glm::dvec3 vv = point - cent;
+      double     dx = glm::dot( vecX, vv );
+      double     dy = glm::dot( vecY, vv );    
       double     dz = glm::dot( vecZ, vv );
 
-      glm::dvec3 coneSpacePoint = glm::dvec3( ( radius + dz * sinSemiAngle ) * glm::normalize( glm::dvec2( vv ) ), dz );
+      glm::dvec3 coneSpacePoint = glm::dvec3( ( radius + dz * sinSemiAngle ) * glm::normalize( glm::dvec2( dx, dy ) ), dz );
 
       return cent + coneSpacePoint.x * vecX + coneSpacePoint.y * vecY + coneSpacePoint.z * vecZ;
     },
@@ -630,6 +630,11 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
   std::priority_queue< std::pair< double, size_t > > outsideMostBoundaries;
 
+  if ( bounds.size() == 1 && bounds[0].curve.points.size() < 3 ) {
+    // If there is no curve, we can not triangulate
+    return;
+  }
+
   // Find the relative coordinates of each curve point in the cylinder reference
   // plane Only retain the max and min relative Z
   for (size_t i = 0; i < bounds.size(); i++) {
@@ -659,7 +664,7 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
   WingedEdgeMesh< ParameterVertex > mesh;
 
-  double zBias = ( maxZ - minZ ) / radius;
+  double zScale = 0.5 / ( maxZ - minZ );
 
   while ( !outsideMostBoundaries.empty() ) {
 
@@ -679,7 +684,8 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
       double dz = glm::dot(vecZ, vv);
 
       glm::dvec2 pInv =
-        glm::dvec2( dx, dy ) * ( zBias + ( dz - minZ ) );
+        glm::normalize( glm::dvec2( dx, dy ) ) *
+        ( 0.5 + ( dz - minZ ) * zScale );
 
       points.push_back({pInv.x, pInv.y});
       mesh.makeVertex( { pt, pInv } );
@@ -688,10 +694,71 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
     uvBoundaryValues.push_back( points );
   }
 
-  // Triangulate projected boundary
-  // Subdivide resulting triangles to increase definition
-  // r indicates the level of subdivision, currently 3 you can increase it to
-  // 5
+
+#if (OUTPUT_SVG_DEBUG == 1) 
+
+    static size_t svgIndex = 0;
+
+    size_t outputIndex = svgIndex++;
+
+    std::ofstream svgFile( "cylinder_" + std::to_string( outputIndex ) + ".svg" );
+
+    auto svgScale = []( double value ) {
+
+      return 50 + ( 1024.0 * ( value + 1.0 ) / 2.0 ); 
+
+    };
+
+    svgFile << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+              << "width=\"1124\" height=\"1124\">\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"512\" style=\"stroke:rgb(255, 132, 0);stroke-width:2\" fill=\"none\"/>\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"256\" style=\"stroke:rgb(0, 0, 255);stroke-width:2\" fill=\"none\"/>\n";
+
+    for ( const std::vector< Point >& loop  : uvBoundaryValues )
+    {
+      bool firstInLoop = true;
+      
+      glm::dvec2 lastPoint;
+
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+
+        if ( firstInLoop )
+        {
+          svgFile << "<polyline points=\"";
+          firstInLoop = false;
+        }
+        else
+        {
+          svgFile << " ";
+        }
+
+        svgFile << svgScale( svgPoint.x ) << "," << svgScale( svgPoint.y );
+
+        lastPoint = svgPoint;
+      }
+
+      svgFile << "\" style=\"fill:none;stroke:rgb(0,0,0);stroke-width:2\" />\n";
+      
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+        
+        svgFile << "<circle cx=\"" << svgScale( svgPoint.x ) << "\" cy=\"" << svgScale( svgPoint.y )
+            << "\" r=\"3\" fill=\"red\"/>\n";
+      }
+    }
+
+    svgFile << "</svg>\n";
+
+    svgFile.close();
+
+#endif
 
   std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
 
@@ -707,14 +774,14 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
     mesh,
     [&]( const glm::dvec3& point, [[maybe_unused]]const glm::dvec2& from ) { 
       
-      glm::dvec3 vv       = point - cent;
-      double     dx       = glm::dot(vecX, vv);
-      double     dy       = glm::dot(vecY, vv);
-      double     dz       = glm::dot(vecZ, vv);
-      glm::dvec2 inPlane  = glm::dvec2( dx, dy );
-      double     distance = glm::length( inPlane );
+      glm::dvec3 vv                = point - cent;
+      double     dx                = glm::dot(vecX, vv);
+      double     dy                = glm::dot(vecY, vv);
+      double     dz                = glm::dot(vecZ, vv);
+      glm::dvec2 inPlane           = glm::dvec2( dx, dy );
+      glm::dvec2 normalizedInPlane = glm::normalize( from );
 
-      glm::dvec2 newInPlane = inPlane * ( radius / distance );
+      glm::dvec2 newInPlane = normalizedInPlane * radius;
 
       return cent + newInPlane.x * vecX + newInPlane.y * vecY + vecZ * dz;
     },

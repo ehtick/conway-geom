@@ -168,19 +168,35 @@ inline glm::dvec3 InterpolateRationalBSplineCurveWithKnots(
   double low = knots[domainLow];
   double high = knots[domainHigh];
 
-  double tPrime = t * (high - low) + low;
-  if (tPrime < low || tPrime > high) {
-    Logger::logWarning("BSpline tPrime out of bounds\n");
-    return glm::dvec3(0, 0, 0);
-  }
-
   // find s (the spline segment) for the [t] value provided
   int s = domainHigh - 1;
+  
+  double tPrime;
 
-  for (int i = domainLow; i < domainHigh; i++) {
-    if (knots[i] <= tPrime && tPrime < knots[i + 1]) {
-      s = i;
-      break;
+  if ( low > high ) {
+
+    std::swap( low, high );
+
+    // If the knots are reversed, we need to reverse search for the domain backwards.
+
+    tPrime = t * (high - low) + low;
+
+    for (int i = domainLow; i < domainHigh; i++) {
+      if (knots[i] >= tPrime && tPrime > knots[i + 1]) {
+        s = i;
+        break;
+      }
+    }
+
+  } else {
+
+    tPrime = t * (high - low) + low;
+
+    for (int i = domainLow; i < domainHigh; i++) {
+      if (knots[i] <= tPrime && tPrime < knots[i + 1]) {
+        s = i;
+        break;
+      }
     }
   }
 
@@ -197,11 +213,10 @@ inline glm::dvec3 InterpolateRationalBSplineCurveWithKnots(
   // printf( "Degree %d HP %zu\n", degree, homogeneousPoints.size() );
 
   // l (level) goes from 1 to the curve degree + 1
-  double alpha;
   for (int l = 1; l <= degree + 1; l++) {
     // build level l of the pyramid
     for (int i = s; i > s - degree - 1 + l; i--) {
-      alpha = (tPrime - knots[i]) / (knots[i + degree + 1 - l] - knots[i]);
+      double alpha = (tPrime - knots[i]) / (knots[i + degree + 1 - l] - knots[i]);
 
       // interpolate each component
 

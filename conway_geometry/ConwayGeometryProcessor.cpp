@@ -594,7 +594,7 @@ void ConwayGeometryProcessor::AddFaceToGeometry(
        TriangulateToroidalSurface(geometry, parameters.boundsArray,
                                    surface);
       } else if (surface.ConicalSurface.Active) {
-        TriangulateConicalSurface(geometry, parameters.boundsArray, surface);
+       TriangulateConicalSurface(geometry, parameters.boundsArray, surface);
       } else if (surface.RevolutionSurface.Active) {
         TriangulateRevolution(geometry, parameters.boundsArray, surface);
       } else if (surface.ExtrusionSurface.Active) {
@@ -1186,6 +1186,26 @@ ConwayGeometryProcessor::GeometryToGltf(
     glm::dvec3 positionBias;
 
     for (conway::geometry::GeometryCollection &geom : geoms) {
+
+      if ( geom.components.empty() ) {
+        continue;
+      }
+
+      bool hasTriangles = false;
+
+      for ( conway::geometry::Geometry *componentPtr : geom.components ) {
+        conway::geometry::Geometry &component = *componentPtr;
+
+        if ( !component.triangles.empty() ) {
+          hasTriangles = true;
+          break;
+        }
+      }
+
+      if ( !hasTriangles ) {
+        continue;
+      }
+
       // create a mesh object
       std::unique_ptr<draco::Mesh> dracoMesh;
 
@@ -1205,7 +1225,6 @@ ConwayGeometryProcessor::GeometryToGltf(
           dracoMeshCompression;
 
       int32_t pos_att_id = -1;
-
       // this internally populates the vertex float array, current storage type
       // is double
       // geom.GetVertexData();
@@ -2214,8 +2233,9 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
 
   bool byPos = false;
 
-  int startOffset = 0;
-  int endOffset   = 0;
+  int startOffset   = 0;
+  int endOffset     = 0;
+  bool isTrimmed360 = false;
 
   if (parameters.paramsGetIfcTrimmedCurve.trimExists)
   {
@@ -2247,8 +2267,8 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
       else if (parameters.dimensions == 3)
       {
         glm::dmat4 placement = parameters.axis2Placement3D;
-        glm::dvec4 vecX = placement[0];
-        glm::dvec4 vecY = placement[1];
+        glm::dvec3 vecX = placement[0];
+        glm::dvec3 vecY = placement[1];
 
         glm::dvec3 v1 =
             glm::dvec3(parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D.x -
@@ -2265,19 +2285,21 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
                       parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D.z -
                           placement[3].z);
 
-        double dxS = vecX.x * v1.x + vecX.y * v1.y + vecX.z * v1.z;
-        double dyS = vecY.x * v1.x + vecY.y * v1.y + vecY.z * v1.z;
+        double dxS = glm::dot(vecX, v1);
+        double dyS = glm::dot(vecY, v1);
         // double dzS = vecZ.x * v1.x + vecZ.y * v1.y + vecZ.z * v1.z;
 
-        double dxE = vecX.x * v2.x + vecX.y * v2.y + vecX.z * v2.z;
-        double dyE = vecY.x * v2.x + vecY.y * v2.y + vecY.z * v2.z;
+        double dxE = glm::dot(vecX, v2);
+        double dyE = glm::dot(vecY, v2);
         // double dzE = vecZ.x * v2.x + vecZ.y * v2.y + vecZ.z * v2.z;
 
-        endDegrees = VectorToAngle(dxS, dyS) - 90;
+        endDegrees   = VectorToAngle(dxS, dyS) - 90;
         startDegrees = VectorToAngle(dxE, dyE) - 90;
         
         if ( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D == 
             parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D ) {
+
+          isTrimmed360 = true;
 
           if ( parameters.paramsGetIfcTrimmedCurve.senseAgreement ) {
             endDegrees += 360;
@@ -2334,11 +2356,14 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
     lengthDegrees = endDegrees - startDegrees;
   }
 
+  if (isTrimmed360) {
+    lengthDegrees = 360.0;
+  }
+  
   if ( parameters.paramsGetIfcTrimmedCurve.trimExists &&
        parameters.paramsGetIfcTrimmedCurve.senseAgreement &&
        parameters.isEdge ) {
-    // if this is an edge, we reverse the curve
-    
+    // if this is an edge, we reverse the curve   
       
     lengthDegrees = -lengthDegrees;
     

@@ -24,6 +24,7 @@
 #include "representation/Geometry.h"
 #include "representation/IfcGeometryReps.h"
 #include "logging/Logger.h"
+#include "manifold_utils.h"
 
 #if !defined(_USE_MATH_DEFINES)
 #define _USE_MATH_DEFINES 1
@@ -605,7 +606,7 @@ inline void TriangulateBounds(Geometry &geometry,
     );
 
     // size_t offset = geometry.numPoints;
-  } else if (bounds.size() > 0 && bounds[0].curve.points.size() >= 3) {
+  } else if (bounds.size() > 0 ) {
     // bound greater than 4 vertices or with holes, triangulate
     // TODO: modify to use glm::dvec2 with custom accessors
     using Point = std::array<double, 2>;
@@ -633,11 +634,6 @@ inline void TriangulateBounds(Geometry &geometry,
       }
     }
 
-    // if the first bound is not an outer bound now, this is unexpected
-    if ( bounds[0].type != IfcBoundType::OUTERBOUND ) {
-      Logger::logWarning("Expected outer bound first!");
-    }
-
     glm::dvec3 v1, v2, v3;
 
     if (!GetBasisFromCoplanarPoints(bounds[0].curve.points, v1, v2, v3)) {
@@ -651,6 +647,22 @@ inline void TriangulateBounds(Geometry &geometry,
     glm::dvec3 v13(glm::normalize(v1 - v2));
     glm::dvec3 n = glm::normalize(glm::cross(v12, v13));
     v12 = glm::cross(v13, n);
+
+
+    // if the first bound is not an outer bound now, this is unexpected
+    if ( bounds[0].type != IfcBoundType::OUTERBOUND ) {
+      
+      tesselatePlane(
+        geometry, bounds, [&]( const glm::dvec3& vertex ) {
+
+          glm::dvec3 pt2 = vertex - v1;
+
+          return glm::dvec2(glm::dot(pt2, v12), glm::dot(pt2, v13));
+        } );
+
+        return;
+    }
+
 
     // check winding of outer bound
     IfcCurve test;
@@ -670,6 +682,12 @@ inline void TriangulateBounds(Geometry &geometry,
       n *= -1;
       std::swap(v12, v13);
     }
+    
+    // if the first bound is not an outer bound now, this is unexpected
+    if ( bounds[0].type != IfcBoundType::OUTERBOUND ) {
+      Logger::logWarning("Expected outer bound first!");
+    }
+
 
     for (auto &bound : bounds) {
 
