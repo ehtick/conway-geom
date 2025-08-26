@@ -287,6 +287,7 @@ struct IfcSurface {
   Torus ToroidalSurface;
   Revolution RevolutionSurface;
   Extrusion ExtrusionSurface;
+  bool sameSense = false;
 
   glm::dvec3 normal() {
     if (!CylinderSurface.Active && !BSplineSurface.Active &&

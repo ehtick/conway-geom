@@ -305,18 +305,19 @@ inline glm::dvec2 InterpolateRationalBSplineCurveWithKnots(
 
 inline std::vector<glm::dvec3> GetRationalBSplineCurveWithKnots(
     int degree, const std::vector<glm::dvec3>& points,
-    const std::vector<double>& knots, const std::vector<double>& weights) {
+    const std::vector<double>& knots, const std::vector<double>& weights,
+    double tStart = 0, double tEnd = 1 ) {
   std::vector<glm::dvec3> result;
 
   std::vector<std::pair<double, glm::dvec3> > spanStack;
 
   double acceptedT = 0;
 
-  result.push_back(InterpolateRationalBSplineCurveWithKnots(0, degree, points,
+  result.push_back(InterpolateRationalBSplineCurveWithKnots(tStart, degree, points,
                                                             knots, weights));
 
-  spanStack.emplace_back(1, InterpolateRationalBSplineCurveWithKnots(
-                                1, degree, points, knots, weights));
+  spanStack.emplace_back(tEnd, InterpolateRationalBSplineCurveWithKnots(
+                                tEnd, degree, points, knots, weights));
 
   while (!spanStack.empty()) {
     const glm::dvec3& acceptedPoint = result.back();
@@ -324,8 +325,8 @@ inline std::vector<glm::dvec3> GetRationalBSplineCurveWithKnots(
     double nextT = spanStack.back().first;
     const glm::dvec3& nextPoint = spanStack.back().second;
 
-    double candidateT = acceptedT + ((nextT - acceptedT) * 0.5);
-    double deltaT = (nextT - acceptedT) * 0.5;
+    double deltaT     = (nextT - acceptedT) * 0.5;
+    double candidateT = acceptedT + (deltaT);
     glm::dvec3 midPointLinear =
         (nextPoint - acceptedPoint) * 0.5 + acceptedPoint;
     glm::dvec3 midPointSpline = InterpolateRationalBSplineCurveWithKnots(
@@ -333,8 +334,8 @@ inline std::vector<glm::dvec3> GetRationalBSplineCurveWithKnots(
 
     glm::dvec3 deflectionVector = midPointSpline - midPointLinear;
 
-    if (deltaT > MIN_T_DELTA &&
-        glm::dot(deflectionVector, deflectionVector) > MAX_CURVE_DEFLECTION2) {
+    if ( fabs( deltaT ) > MIN_T_DELTA &&
+        glm::dot(deflectionVector, deflectionVector) > MAX_CURVE_DEFLECTION2 ) {
       spanStack.emplace_back(candidateT, midPointSpline);
 
     } else {
@@ -349,18 +350,19 @@ inline std::vector<glm::dvec3> GetRationalBSplineCurveWithKnots(
 
 inline std::vector<glm::dvec2> GetRationalBSplineCurveWithKnots(
     int degree, const std::vector<glm::dvec2>& points,
-    const std::vector<double>& knots, const std::vector<double>& weights) {
+    const std::vector<double>& knots,const std::vector<double>& weights,
+    double tStart = 0, double tEnd = 1 ) {
   std::vector<glm::dvec2> result;
 
   std::vector<std::pair<double, glm::dvec2> > spanStack;
 
   double acceptedT = 0;
 
-  result.push_back(InterpolateRationalBSplineCurveWithKnots(0, degree, points,
+  result.push_back(InterpolateRationalBSplineCurveWithKnots( tStart, degree, points,
                                                             knots, weights));
 
   spanStack.emplace_back(1, InterpolateRationalBSplineCurveWithKnots(
-                                1, degree, points, knots, weights));
+                                tEnd, degree, points, knots, weights));
 
   while (!spanStack.empty()) {
     const glm::dvec2& acceptedPoint = result.back();
@@ -377,7 +379,7 @@ inline std::vector<glm::dvec2> GetRationalBSplineCurveWithKnots(
 
     glm::dvec2 deflectionVector = midPointSpline - midPointLinear;
 
-    if (deltaT > MIN_T_DELTA &&
+    if ( fabs( deltaT ) > MIN_T_DELTA &&
         glm::dot(deflectionVector, deflectionVector) > MAX_CURVE_DEFLECTION2) {
       spanStack.emplace_back(candidateT, midPointSpline);
 

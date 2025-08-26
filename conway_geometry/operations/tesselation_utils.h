@@ -27,7 +27,6 @@
 
 namespace conway::geometry {
 
-
   /**
    * A UV parameterized vertex on 2 parameter surface.
    */
@@ -119,16 +118,20 @@ namespace conway::geometry {
   /**
    * Append a winged edge mesh 
    */
-  inline void appendMeshToGeometry( WingedEdgeMesh< ParameterVertex >& mesh, Geometry& geometry ) {
+  inline void appendMeshToGeometry( WingedEdgeMesh< ParameterVertex >& mesh, Geometry& geometry, bool sameSense ) {
 
     uint32_t baseVertex = geometry.vertices.size();
 
     for ( ConnectedTriangle& triangle : mesh.triangles ) {
 
-      if ( !isCCW(  
-        mesh.vertices[ triangle.vertices[ 0 ] ],
-        mesh.vertices[ triangle.vertices[ 1 ] ],
-        mesh.vertices[ triangle.vertices[ 2 ] ]) ) {
+      uint32_t v0 = triangle.vertices[ 0 ];
+      uint32_t v1 = triangle.vertices[ 1 ];
+      uint32_t v2 = triangle.vertices[ 2 ];
+
+      if ( ( !isCCW(  
+        mesh.vertices[ v0 ],
+        mesh.vertices[ v1 ],
+        mesh.vertices[ v2 ] ) ) != sameSense ) {
 
         std::swap( triangle.vertices[ 0 ], triangle.vertices[ 2 ] );
         std::swap( triangle.edges[ 0 ], triangle.edges[ 2 ] );

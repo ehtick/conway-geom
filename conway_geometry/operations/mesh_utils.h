@@ -14,10 +14,12 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+#include <ranges>
 
 #include "geometry_utils.h"
 #include "tesselation_utils.h"
 #include "manifold_utils.h"
+#include <queue>
 
 #define CONST_PI 3.141592653589793238462643383279502884L
 
@@ -146,9 +148,9 @@ inline void TriangulateRevolution(Geometry &geometry,
   //  ... we will represent this bounding box.
 
   double startRad = startDegrees / 180 * (double)CONST_PI;
-  double endRad = endDegrees / 180 * (double)CONST_PI;
-  double radSpan = endRad - startRad;
-  double radStep = radSpan / (numRots - 1);
+  double endRad   = endDegrees / 180 * (double)CONST_PI;
+  double radSpan  = endRad - startRad;
+  double radStep  = radSpan / (numRots - 1);
 
   for (size_t i = 0; i < surface.RevolutionSurface.Profile.curve.points.size();
        i++) {
@@ -439,6 +441,13 @@ inline void TriangulateConicalSurface(
   glm::dvec3 vecX = glm::normalize(surface.transformation[0]);
   glm::dvec3 vecY = glm::normalize(surface.transformation[1]);
   glm::dvec3 vecZ = glm::normalize(surface.transformation[2]);
+  
+  bool sameSense = surface.sameSense;
+
+  if ( glm::dot( vecZ, vecX ) > 0 ) {
+  
+    sameSense = !sameSense;
+  }
 
   std::vector<std::vector<glm::dvec3>> newPoints;
 
@@ -462,8 +471,6 @@ inline void TriangulateConicalSurface(
       double dx = glm::dot(vecX, vv);
       double dy = glm::dot(vecY, vv);
 
-      //					double dx = glm::dot(vecX, vv);
-      //					double dy = glm::dot(vecY, vv);
       double dr = glm::length( glm::dvec2( dx, dy ) );
       
       localMaxR = std::max( localMaxR, dr );
@@ -489,10 +496,14 @@ inline void TriangulateConicalSurface(
     size_t boundsIndex = outsideMostBoundaries.top().second;
 
     outsideMostBoundaries.pop();
+   const IfcBound3D& bound = bounds[ boundsIndex ];
 
-    for (size_t j = 0; j < bounds[ boundsIndex ].curve.points.size(); j++) {
+    if ( bound.curve.points.empty() ) {
+      continue;
+    }
 
-      glm::dvec3 pt = bounds[ boundsIndex ].curve.points[ j ];
+    for ( const glm::dvec3& pt : bound.curve.points ) {
+
       glm::dvec3 vv = pt - cent;
 
       double dx = glm::dot(vecX, vv);
@@ -604,7 +615,7 @@ inline void TriangulateConicalSurface(
     mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
     MAX_DEFLECTION );
 
-  appendMeshToGeometry( mesh, geometry );
+  appendMeshToGeometry( mesh, geometry, sameSense );
 }
 
 // TODO: review and simplify
@@ -623,6 +634,13 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
   glm::dvec3 vecY = glm::normalize(surface.transformation[1]);
   glm::dvec3 vecZ = glm::normalize(surface.transformation[2]);
 
+  bool sameSense = surface.sameSense;
+
+  if ( glm::dot( vecZ, vecX ) > 0 ) {
+  
+    sameSense = !sameSense;
+  }
+  
   std::vector<std::vector<glm::dvec3>> newPoints;
 
   double minZ = DBL_MAX;
@@ -674,9 +692,14 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
     outsideMostBoundaries.pop();
 
-    for (size_t j = 0; j < bounds[boundsIndex].curve.points.size(); j++) {
+    const IfcBound3D& bound = bounds[ boundsIndex ];
 
-      glm::dvec3 pt = bounds[ boundsIndex ].curve.points[ j ];
+    if ( bound.curve.points.empty() ) {
+      continue;
+    }
+
+    for ( const glm::dvec3& pt : bound.curve.points ) {
+
       glm::dvec3 vv = pt - cent;
 
       double dx = glm::dot(vecX, vv);
@@ -689,11 +712,10 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
       points.push_back({pInv.x, pInv.y});
       mesh.makeVertex( { pt, pInv } );
-    }
+    } 
 
     uvBoundaryValues.push_back( points );
   }
-
 
 #if (OUTPUT_SVG_DEBUG == 1) 
 
@@ -788,7 +810,7 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
     mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
     MAX_DEFLECTION );
 
-  appendMeshToGeometry( mesh, geometry );
+  appendMeshToGeometry( mesh, geometry, sameSense );
 }
 
 // TODO: review and simplify
@@ -1051,12 +1073,6 @@ inline void TriangulateBspline(Geometry &geometry,
 
         glm::dvec2 pInv = BSplineInverseEvaluation(pt, srf, 1.0f);
 
-        // printf("[bounds[0]]: point %i, x: %.3f, y: %.3f, z: %.3f u: %.3f v: %.3f\n", j, pt.x,
-        //         pt.y, pt.z, pInv.x, pInv.y);
-
-        // pInv.x /= scaling;
-        // pInv.y /= scaling;
-        
         points.push_back({pInv.x, pInv.y});
         mesh.makeVertex( { pt, pInv } );
       }
@@ -1071,7 +1087,7 @@ inline void TriangulateBspline(Geometry &geometry,
 
     std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
 
-    for (size_t i = 0; i < indices.size(); i += 3) {
+    for ( size_t i = 0; i < indices.size(); i += 3 ) {
 
       mesh.makeTriangle( 
         indices[ i  + 0 ], 
@@ -1087,10 +1103,10 @@ inline void TriangulateBspline(Geometry &geometry,
       mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
       MAX_DEFLECTION );
 
-    appendMeshToGeometry( mesh, geometry );
+    appendMeshToGeometry( mesh, geometry, !surface.sameSense );
 
   } else {
-    printf("surface was not valid!\n");
+    Logger::logError( "Surface was not valid!\n");
   }
 }
 }  // namespace conway::geometry

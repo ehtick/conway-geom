@@ -618,19 +618,30 @@ inline void TriangulateBounds(Geometry &geometry,
     // if more than one bound
     if (bounds.size() > 1) {
       // locate the outer bound index
+
       int outerIndex = -1;
-      for (size_t i = 0; i < bounds.size(); i++) {
-        if (bounds[i].type == IfcBoundType::OUTERBOUND) {
+ 
+      size_t i = 0;
+
+      while ( i < bounds.size() ) {
+
+        if ( bounds[i].type == IfcBoundType::OUTERBOUND ) {
           outerIndex = i;
           break;
         }
+
+        i++;
       }
 
-      if (outerIndex == -1) {
+      if ( outerIndex == -1 && bounds.size() > 1 ) {
         Logger::logWarning("Expected outer bound!");
       } else {
-        // swap the outer bound to the first position
-        std::swap(bounds[0], bounds[outerIndex]);
+
+        if ( outerIndex != 0 ) {
+
+          // swap the outer bound to the first position
+          std::swap(bounds[0], bounds[outerIndex]);
+        }
       }
     }
 
@@ -684,7 +695,7 @@ inline void TriangulateBounds(Geometry &geometry,
     }
     
     // if the first bound is not an outer bound now, this is unexpected
-    if ( bounds[0].type != IfcBoundType::OUTERBOUND ) {
+    if ( bounds[0].type != IfcBoundType::OUTERBOUND && bounds.size() > 1 ) {
       Logger::logWarning("Expected outer bound first!");
     }
 

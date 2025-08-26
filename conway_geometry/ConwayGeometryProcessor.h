@@ -654,8 +654,8 @@ class ConwayGeometryProcessor {
     std::vector<glm::dvec3> points3;
     std::vector<double> knots;
     std::vector<double> weights;
-    bool senseAgreement;
     bool isEdge;
+    ParamsGetIfcTrimmedCurve paramsGetIfcTrimmedCurve;
   };
 
   conway::geometry::IfcCurve getBSplineCurve(

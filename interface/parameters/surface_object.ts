@@ -24,6 +24,7 @@ export interface SurfaceObject extends Deletable {
   torus: ToroidalSurface
   revolution: RevolutionSurface
   extrusion: ExtrusionSurface
+  sameSense: boolean
 
   normal(): Vector3
 }

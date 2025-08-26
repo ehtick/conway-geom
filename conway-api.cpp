@@ -877,7 +877,8 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .property("cone", &conway::geometry::IfcSurface::ConicalSurface)
       .property("torus", &conway::geometry::IfcSurface::ToroidalSurface)
       .property("revolution", &conway::geometry::IfcSurface::RevolutionSurface)
-      .property("extrusion", &conway::geometry::IfcSurface::ExtrusionSurface);
+      .property("extrusion", &conway::geometry::IfcSurface::ExtrusionSurface)
+      .property("sameSense", &conway::geometry::IfcSurface::sameSense);
 
   emscripten::class_<conway::geometry::IfcBound3D>("IfcBound3D")
       .constructor<>();
@@ -1311,6 +1312,26 @@ EMSCRIPTEN_BINDINGS(my_module) {
              &conway::geometry::ConwayGeometryProcessor::ParamsGetIfcCircle::
                  paramsGetIfcTrimmedCurve);
 
+  emscripten::value_object<
+      conway::geometry::ConwayGeometryProcessor::ParamsGetBSplineCurve>(
+      "ParamsGetBSplineCurve")
+      .field("dimensions", &conway::geometry::ConwayGeometryProcessor::
+                               ParamsGetBSplineCurve::dimensions)
+      .field("degree", &conway::geometry::ConwayGeometryProcessor::
+                           ParamsGetBSplineCurve::degree)
+      .field("points2", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::points2)
+      .field("points3", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::points3)
+      .field("knots", &conway::geometry::ConwayGeometryProcessor::
+                          ParamsGetBSplineCurve::knots)
+      .field("weights", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::weights)
+      .field("paramsGetIfcTrimmedCurve", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::paramsGetIfcTrimmedCurve)
+      .field("isEdge", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::isEdge);
+
   // conway::geometry::ConwayGeometryProcessor::ParamsGetIfcLine
   emscripten::value_object<
       conway::geometry::ConwayGeometryProcessor::ParamsGetIfcLine>(
@@ -1605,27 +1626,6 @@ EMSCRIPTEN_BINDINGS(my_module) {
     .field("closed", &conway::geometry::ConwayGeometryProcessor::ParamsGetSweptDiskSolid::closed)
     .field("circleSegments", &conway::geometry::ConwayGeometryProcessor::ParamsGetSweptDiskSolid::circleSegments)
     .field("scalingFactor", &conway::geometry::ConwayGeometryProcessor::ParamsGetSweptDiskSolid::scalingFactor);
-
-
-  emscripten::value_object<
-      conway::geometry::ConwayGeometryProcessor::ParamsGetBSplineCurve>(
-      "ParamsGetBSplineCurve")
-      .field("dimensions", &conway::geometry::ConwayGeometryProcessor::
-                               ParamsGetBSplineCurve::dimensions)
-      .field("degree", &conway::geometry::ConwayGeometryProcessor::
-                           ParamsGetBSplineCurve::degree)
-      .field("points2", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::points2)
-      .field("points3", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::points3)
-      .field("knots", &conway::geometry::ConwayGeometryProcessor::
-                          ParamsGetBSplineCurve::knots)
-      .field("weights", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::weights)
-      .field("senseAgreement", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::senseAgreement)
-      .field("isEdge", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::isEdge);
 
   emscripten::value_object<conway::geometry::IfcTrimmingSelect>(
       "TrimmingSelect")

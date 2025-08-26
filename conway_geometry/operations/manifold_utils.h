@@ -120,9 +120,9 @@ namespace conway::geometry
         {
           continue;
         }
-
+        
         loopEdges.emplace_back( previousVertexIndex, vertexIndex );
-
+        
         previousVertexIndex = vertexIndex;
       }
 
@@ -186,20 +186,45 @@ namespace conway::geometry
         cdtVertices.emplace_back( param2.x, param2.y );
       }
 
+      if ( remappedV1 == remappedV2 )
+      {
+        continue; // Skip edges with same vertices.
+      }
+
       cdtEdges.emplace_back( remappedV1, remappedV2 );
     }
 
-    static uint32_t svgIndex = 0;
+    static uint32_t svgIndex    = 0;
+    uint32_t        outputIndex = svgIndex++;
 
-    uint32_t outputIndex = svgIndex++;
-
+    // Output SVG for debugging.
 #if (OUTPUT_SVG_DEBUG == 1)
+
+    printf( "Writing planar triangulation SVG %d\n", outputIndex );
 
     std::ofstream svgFile( "planar_" + std::to_string( outputIndex ) + ".svg" );
 
-    auto svgScale = []( double value ) {
+    glm::dvec2 minBound(  std::numeric_limits<double>::max(),  std::numeric_limits<double>::max() );
+    glm::dvec2 maxBound( -std::numeric_limits<double>::max(), -std::numeric_limits<double>::max() );
 
-      return 50 + ( 1024.0 * ( value + 2.0 ) / 4.0 ); 
+    for ( const CDT::Edge &edge : cdtEdges )
+    {
+      const CDT::V2d< double > &v1 = cdtVertices[ edge.v1() ];
+      const CDT::V2d< double > &v2 = cdtVertices[ edge.v2() ];
+
+      glm::dvec2 v1d( v1.x, v1.y );
+      glm::dvec2 v2d( v2.x, v2.y );
+
+      minBound = glm::min( minBound, glm::min( v1d, v2d ) );
+      maxBound = glm::max( maxBound, glm::max( v1d, v2d ) );
+    }
+
+    double base   = std::min( minBound.x, minBound.y );
+    double extent = std::max( maxBound.x, maxBound.y ) - base;
+
+    auto svgScale = [=]( double value ) {
+
+      return 50 + ( 1024.0 * ( ( value - base ) / extent ) ); 
 
     };
 
@@ -219,7 +244,7 @@ namespace conway::geometry
 
       svgFile << "<line x1=\"" << svgScale( v1.x ) << "\" y1=\"" << svgScale( v1.y )
               << "\" x2=\"" << svgScale( v2.x ) << "\" y2=\"" << svgScale( v2.y )
-              << "\" style=\"stroke:rgb(0,0,0);stroke-width:2\" />\n";
+              << "\" style=\"stroke:rgb(0,0,0);stroke-width:1\" />\n";
     }
     
     for ( uint32_t vertexIndex = 0; vertexIndex < cdtVertices.size(); ++vertexIndex )
@@ -227,11 +252,11 @@ namespace conway::geometry
       const CDT::V2d< double > &vertex       = cdtVertices[ vertexIndex ];
 
       svgFile << "<circle cx=\"" << svgScale( vertex.x ) << "\" cy=\"" << svgScale( vertex.y )
-              << "\" r=\"4\" fill=\"red\" />\n";
+              << "\" r=\"2\" fill=\"red\" />\n";
     }
 
     svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
-            << "\" r=\"4\" fill=\"green\" />\n";
+            << "\" r=\"2\" fill=\"green\" />\n";
 
     svgFile << "</svg>\n";
 

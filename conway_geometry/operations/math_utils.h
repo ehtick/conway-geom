@@ -25,6 +25,7 @@
 
 #endif
 
+#include <queue>
 
 namespace conway {
   
@@ -194,6 +195,109 @@ namespace conway {
     return 0;
   }
 
+  template < typename T >
+  using GlmInterval = std::pair< T, T >;
+
+  template < typename T >
+  inline GlmInterval< T > make_interval( T start, T end ) {
+    return std::make_pair( start, end );
+  }
+
+  template < typename T >
+  inline GlmInterval< T > operator+( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( a.first + b.first, a.second + b.second );
+  }
+
+  template < typename T >
+  inline GlmInterval< T > operator-( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( a.first - b.first, a.second - b.second );
+  }
+
+  template < typename T >
+  inline GlmInterval< T > operator*( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( 
+      glm::min( 
+        glm::min( a.first * b.first, a.second * b.second ),
+        glm::min( a.first * b.second, a.second * b.first ) ), 
+      glm::max( 
+        glm::max( a.first * b.first, a.second * b.second ),
+        glm::max( a.first * b.second, a.second * b.first ) ) );
+  }
+  
+  template < typename T >
+  inline GlmInterval< T > operator/( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( 
+      glm::min( 
+        glm::min( a.first / b.first, a.second / b.second ),
+        glm::min( a.first / b.second, a.second / b.first ) ), 
+      glm::max( 
+        glm::max( a.first / b.first, a.second / b.second ),
+        glm::max( a.first / b.second, a.second / b.first ) ) );
+  }
+
+
+  template < typename T >
+  inline GlmInterval< T > operator*( const GlmInterval< T >& a, double b ) {
+
+    return b >= 0 ?
+      std::make_pair( a.first * b, a.second * b ) :
+      std::make_pair( a.second * b, a.first * b );
+      
+  }
+
+  template < typename T >
+  inline double best_fit_param_bisection( T function, double start, double end, double tolerance = 1e-6 ) {
+
+    // if ( start > end ) {
+
+    //   std::swap( start, end );
+    // }
+
+    std::priority_queue< 
+      std::tuple< double, double, double >,
+      std::vector< std::tuple< double, double, double > >,
+      std::greater< std::tuple< double, double, double > > > best; 
+
+    // Start with a decent number of samples as simple bisection
+    // will not work will for functions that aren't unimodal.
+    for ( double where = 0; where < 32.0; ++where ) {
+
+      double a = start + ( end - start ) * where / 32.0;
+      double b = start + ( end - start ) * ( where + 1.0 ) / 32.0;
+
+      // We use the maximum of two values because it allows a bisection to be
+      // worse than the original values, which handles the concave case.
+      best.push( std::make_tuple( std::max( function( a ), function( b ) ), a, b ) );
+    }
+
+    while ( true ) {
+
+      auto [ distance, a, b ] = best.top();
+
+      double aF = function( a );
+      double bF = function( b );
+
+      if ( fabs( a - b ) < tolerance ) {
+
+        return aF < bF ? a : b; // Return the best fit parameter
+
+      }
+
+      best.pop();
+     
+      double mid = ( a + b ) / 2.0;
+
+      double midF = function( mid );
+
+      best.push( std::make_tuple( std::max( midF, aF ), a, mid ) );
+      best.push( std::make_tuple( std::max( midF, bF ), mid, b ) );
+    }
+  }
+
   
   /** Will get the best 2D projection for a triangle that simply involves truncating an axis
    *  As long as the triangle is non-zero area, given that orient2D is exact, it should
@@ -232,6 +336,10 @@ namespace conway {
     AxisPair axes        = best_truncated_projection( v0, v1, v2 );
     double   orientation = orient2D( v0, v1, v2, axes );
     
+    if ( axes == AxisPair::X_Z || axes == AxisPair::Y_Z ) {
+      orientation = -orientation;
+    }
+
     if ( orientation > tolerance ) {
 
       return 1;
