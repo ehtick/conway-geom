@@ -659,7 +659,6 @@ inline void TriangulateBounds(Geometry &geometry,
     glm::dvec3 n = glm::normalize(glm::cross(v12, v13));
     v12 = glm::cross(v13, n);
 
-
     // if the first bound is not an outer bound now, this is unexpected
     if ( bounds[0].type != IfcBoundType::OUTERBOUND ) {
       
@@ -671,9 +670,8 @@ inline void TriangulateBounds(Geometry &geometry,
           return glm::dvec2(glm::dot(pt2, v12), glm::dot(pt2, v13));
         } );
 
-        return;
+      return;
     }
-
 
     // check winding of outer bound
     IfcCurve test;

@@ -918,9 +918,9 @@ IfcCurve ConwayGeometryProcessor::GetLoop(const ParamsGetLoop& parameters) {
             }
           } else {*/
       //    if (notPresent(pt, curve.points)) {
-            if ( curve.Add3d(pt) ) {
-              curve.indices.push_back(id);
-            }
+          if ( curve.Add3d(pt) ) {
+            curve.indices.push_back(id);
+          }
       //    }
           // }
         }
@@ -2247,7 +2247,7 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
 
   double startDegrees  = 0.0;
   double lengthDegrees = 360.0;
-  double endDegrees   = 360.0;
+  double endDegrees    = 360.0;
 
   if (parameters.paramsGetIfcTrimmedCurve.trimExists)
   {
@@ -2271,22 +2271,46 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
         glm::dvec2 vecY = placement[1];
         glm::dvec2 centre = placement[2];
 
-        glm::dvec2 v1 = parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D - centre;
-        glm::dvec2 v2 = parameters.paramsGetIfcTrimmedCurve.trim2Cartesian2D - centre;
+        glm::dvec2 v1 = glm::normalize( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D - centre );
+        glm::dvec2 v2 = glm::normalize( parameters.paramsGetIfcTrimmedCurve.trim2Cartesian2D - centre );
 
-        double dxS = glm::dot(vecX, v1);
-        double dyS = glm::dot(vecY, v1);
-        
-        double dxE = glm::dot(vecX, v2);
-        double dyE = glm::dot(vecY, v2);
+        double dxS = v1.x;
+        double dyS = v1.y;
+
+        double dxE = v2.x;
+        double dyE = v2.y;
 
         startDegrees = 180.0 * atan2( dyS, dxS ) / M_PI;
         endDegrees   = 180.0 * atan2( dyE, dxE ) / M_PI;
 
         if ( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D == 
-            parameters.paramsGetIfcTrimmedCurve.trim2Cartesian2D ) {
+             parameters.paramsGetIfcTrimmedCurve.trim2Cartesian2D ) {
           
+          if ( parameters.paramsGetIfcTrimmedCurve.senseAgreement ) {
+            endDegrees = startDegrees + 360;
+          } else {
+            endDegrees = startDegrees - 360;
+          }
+        }
+
+        while (startDegrees < 0)
+        {
+          startDegrees += 360;
+        }
+
+        while (endDegrees < 0)
+        {
           endDegrees += 360;
+        }
+
+        while (startDegrees > 360)
+        {
+          startDegrees -= 360;
+        }
+
+        while (endDegrees > 360)
+        {
+          endDegrees -= 360;
         }
 
         startOffset = 1;
@@ -2312,8 +2336,8 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
         double dyE = glm::dot(vecY, v2);
         // double dzE = vecZ.x * v2.x + vecZ.y * v2.y + vecZ.z * v2.z;
 
-        startDegrees   = /*std::fmod*/( 180.0 * atan2(dyS, dxS) / M_PI);//, 360.0 );
-        endDegrees     = /*std::fmod*/( 180.0 * atan2(dyE, dxE) / M_PI);//, 360.0 );
+        startDegrees = ( 180.0 * atan2( dyS, dxS ) / M_PI );
+        endDegrees   = ( 180.0 * atan2( dyE, dxE ) / M_PI );
 
         if ( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D == 
              parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D ) {
@@ -2334,9 +2358,7 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
     
     lengthDegrees = endDegrees - startDegrees;
 
-    bool condition = parameters.paramsGetIfcTrimmedCurve.senseAgreement;
-  
-    if ( condition ) {
+    if ( parameters.paramsGetIfcTrimmedCurve.senseAgreement ) {
 
       if ( lengthDegrees < 0.0 ) {
         lengthDegrees += 360.0;
@@ -2349,10 +2371,8 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
       }
 
       lengthDegrees = -lengthDegrees;
-
     }
   }
-
 
   lengthDegrees = std::clamp( lengthDegrees, -360.0, 360.0 );
 

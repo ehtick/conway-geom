@@ -143,9 +143,9 @@ namespace conway::geometry
       parameterizationVertices.emplace_back( parameterization( vertex ) );
     }
 
-    std::vector< CDT::Edge >      cdtEdges;
-    std::vector<uint32_t>         vertexRemapping;
-    std::vector<uint32_t>         reverseVertexRemapping(
+    std::vector< CDT::Edge > cdtEdges;
+    std::vector<uint32_t>    vertexRemapping;
+    std::vector<uint32_t>    reverseVertexRemapping(
       vertexCount,
       EMPTY_INDEX );
     std::vector< CDT::V2d< double > > cdtVertices;
