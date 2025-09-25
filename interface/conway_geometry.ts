@@ -557,6 +557,16 @@ export class ConwayGeometry {
    * @param parameters
    * @return {CurveObject} - Native Curve Object
    */
+  getAP214Circle(parameters: ParamsGetIfcCircle): CurveObject {
+    const result = this.wasmModule.getAP214Circle(parameters)
+    return result
+  }
+
+  /**
+   *
+   * @param parameters
+   * @return {CurveObject} - Native Curve Object
+   */
   getIfcLine(parameters: ParamsGetIfcLine): CurveObject {
     const result = this.wasmModule.getIfcLine(parameters)
     return result

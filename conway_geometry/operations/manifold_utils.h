@@ -75,9 +75,9 @@ namespace conway::geometry
   {
     LoopEdgeMesh boundaryMesh;
 
-    VertexMap               &vertexMap          = boundaryMesh.vertexMap;
-    std::vector<glm::dvec3> &vertices           = output.vertices;
-    std::vector< LoopEdge > &loopEdges          = boundaryMesh.loopEdges;
+    VertexMap               &vertexMap = boundaryMesh.vertexMap;
+    std::vector<glm::dvec3> &vertices  = output.vertices;
+    std::vector< LoopEdge > &loopEdges = boundaryMesh.loopEdges;
 
      // Build connected edge structure with unique vertices from boundary loops.
     for ( const IfcBound3D &boundary : boundaries )
@@ -197,7 +197,7 @@ namespace conway::geometry
     static uint32_t svgIndex    = 0;
     uint32_t        outputIndex = svgIndex++;
 
-    // Output SVG for debugging.
+// Output SVG for debugging.
 #if (OUTPUT_SVG_DEBUG == 1)
 
     printf( "Writing planar triangulation SVG %d\n", outputIndex );

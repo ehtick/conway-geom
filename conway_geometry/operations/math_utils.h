@@ -298,6 +298,36 @@ namespace conway {
     }
   }
 
+  inline glm::dvec2 robust_2x2_solve( glm::dmat2x2 a, glm::dvec2 b ) {
+
+    double determinant = glm::determinant( a );
+
+    if ( glm::abs( determinant ) > DBL_EPSILON ) {
+
+      return glm::dvec2(
+        ( b.x * a[1][1] - b.y * a[0][1] ) / determinant,
+        ( a[0][0] * b.y - a[1][0] * b.x ) / determinant );
+    }
+
+    double ata11 = a[ 0 ][ 0 ] * a[ 0 ][ 0 ] + a[ 1 ][ 0 ] * a[ 1 ][ 0 ];
+    double ata12 = a[ 0 ][ 0 ] * a[ 0 ][ 1 ] + a[ 1 ][ 0 ] * a[ 1 ][ 1 ];
+    double ata22 = a[ 0 ][ 1 ] * a[ 0 ][ 1 ] + a[ 1 ][ 1 ] * a[ 1 ][ 1 ];
+
+    double determinant2 = ata11 * ata22 - ata12 * ata12;
+
+    if ( glm::abs( determinant2 ) > DBL_EPSILON ) {
+
+      double atb1 = a[ 0 ][ 0 ] * b.x + a[ 1 ][ 0 ] * b.y;
+      double atb2 = a[ 0 ][ 1 ] * b.x + a[ 1 ][ 1 ] * b.y;
+
+      return glm::dvec2(
+        ( atb1 * ata22 - atb2 * ata12 ) / determinant2,
+        ( ata11 * atb2 - ata12 * atb1 ) / determinant2 );
+    } else {
+
+      return glm::dvec2( 0.0, 0.0 );
+    }
+  }
   
   /** Will get the best 2D projection for a triangle that simply involves truncating an axis
    *  As long as the triangle is non-zero area, given that orient2D is exact, it should

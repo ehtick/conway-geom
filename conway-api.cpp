@@ -132,6 +132,17 @@ conway::geometry::IfcCurve GetIfcCircle(
   return curve;
 }
 
+conway::geometry::IfcCurve GetAP214Circle(
+    const conway::geometry::ConwayGeometryProcessor::ParamsGetIfcCircle& parameters) {
+  if (processor) {
+    return processor->getAP214Circle(parameters);
+  }
+
+  conway::geometry::IfcCurve curve;
+
+  return curve;
+}
+
 conway::geometry::IfcCurve GetIfcLine(
     const conway::geometry::ConwayGeometryProcessor::ParamsGetIfcLine& parameters) {
   if (processor) {
@@ -1764,6 +1775,7 @@ EMSCRIPTEN_BINDINGS(my_module) {
                        emscripten::allow_raw_pointers());
   emscripten::function("relVoidSubtract", &RelVoidSubtract);
   emscripten::function("getIfcCircle", &GetIfcCircle);
+  emscripten::function("getAP214Circle", &GetAP214Circle);
   emscripten::function("getIfcLine", &GetIfcLine);
   emscripten::function("getBSplineCurve", &GetBSplineCurve);
   emscripten::function("getLoop", &GetLoop);

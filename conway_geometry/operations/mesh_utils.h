@@ -917,7 +917,136 @@ inline void TriangulateExtrusion(Geometry &geometry,
   }
 }
 
-inline double InverseMethod(glm::dvec3 pt, const tinynurbs::RationalSurface3d& srf,
+constexpr size_t INVERSE_GRID_SIDE   = 8.0; 
+constexpr double INVERSE_GRID_SIZE_D = static_cast< double >( INVERSE_GRID_SIDE );
+constexpr double INVERSE_GRID_FACTOR = 1.0 / ( INVERSE_GRID_SIZE_D - 1.0 );
+constexpr double MAX_ERROR           = 0.001;
+constexpr double ALPHA_ERROR         = 1e-6;
+constexpr double MIN_STEP            = 1e-9;
+
+constexpr double MAX_ITERATION       = 50;
+
+struct RationalNurbsInverseMethod {
+
+  glm::dvec3 grid[ INVERSE_GRID_SIDE ][ INVERSE_GRID_SIDE ];
+  const tinynurbs::RationalSurface3d& surface;
+
+  RationalNurbsInverseMethod( const tinynurbs::RationalSurface3d& srf ) : surface( srf ) {
+
+    for ( size_t i = 0; i < INVERSE_GRID_SIDE; ++i ) {
+      for ( size_t j = 0; j < INVERSE_GRID_SIDE; ++j ) {
+
+        grid[ i ][ j ] =
+          tinynurbs::surfacePoint(
+            srf,
+            static_cast< double >( i ) * INVERSE_GRID_FACTOR,
+            static_cast< double > ( j ) * INVERSE_GRID_FACTOR );
+      }
+    }
+  }
+
+  glm::dvec2 operator()( const glm::dvec3& point ) {
+
+    glm::dvec2 bestGuess;
+    glm::dvec3 bestPoint;
+    double     minDistance2 = DBL_MAX;
+    
+    // Take initial guess from the grid.
+    for ( size_t i = 0; i < INVERSE_GRID_SIDE; ++i ) {
+      for ( size_t j = 0; j < INVERSE_GRID_SIDE; ++j ) {
+
+        glm::dvec3 deltaP = grid[ i ][ j ] - point;
+
+        double distance2 = glm::dot( deltaP, deltaP );
+
+        if ( distance2 < minDistance2 ) {
+
+          bestGuess =
+            glm::dvec2(
+              static_cast< double >( i ) * INVERSE_GRID_FACTOR,
+              static_cast< double >( j ) * INVERSE_GRID_FACTOR );
+
+          bestPoint    = grid[ i ][ j ];
+          minDistance2 = distance2;
+        }
+      }
+    }
+
+    size_t iteration = 0;
+
+    double damping = 1e-6;
+
+    while ( minDistance2 > MAX_ERROR * MAX_ERROR && iteration++ < MAX_ITERATION ) {
+
+      glm::dvec3 deltaP = bestPoint - point;
+
+      if ( minDistance2 <= MAX_ERROR * MAX_ERROR ) {
+        break;
+      }
+
+      auto [dU, dV] = tinynurbs::surfaceTangent( surface, bestGuess.x, bestGuess.y );
+
+      glm::dmat2x3 jacobianT( dU, dV ); // Jacobian
+      glm::dmat3x2 jacobian = glm::transpose( jacobianT );   // Transposed Jacobian
+
+      glm::dmat2x2 jtj = jacobian * jacobianT; // J^T * J
+      glm::dvec2   jte = jacobian * deltaP;    // J^T * e
+
+      jtj[ 0 ][ 0 ] += damping;
+      jtj[ 1 ][ 1 ] += damping;
+
+      glm::dvec2 deltaUV = robust_2x2_solve( jtj, jte );
+
+      double alpha = 1.0;
+      double phi   = 0.5 * minDistance2;
+
+      bool success = false;
+
+      while ( alpha > ALPHA_ERROR ) {
+
+        glm::dvec2 newGuessUV = bestGuess - deltaUV * alpha;
+
+        newGuessUV.x = std::clamp( newGuessUV.x, 0.0, 1.0 );
+        newGuessUV.y = std::clamp( newGuessUV.y, 0.0, 1.0 );
+
+        glm::dvec3 newPoint =
+          tinynurbs::surfacePoint( surface, newGuessUV.x, newGuessUV.y );
+
+        glm::dvec3 newDeltaP = newPoint - point;
+
+        double newDistance2 = glm::dot( newDeltaP, newDeltaP );
+
+        if ( newDistance2 < minDistance2 - MAX_ERROR * alpha * glm::dot( deltaUV, jte ) ) {
+
+          bestPoint = newPoint;
+          bestGuess = newGuessUV;
+          damping  *= 0.1;
+          
+          minDistance2 = std::min( newDistance2, newDistance2 );
+          success = true;
+          break;
+        }
+
+        alpha *= 0.5;
+      }
+
+      if ( !success ) {
+        damping *= 10.0;
+        continue;
+      }
+
+      if ( glm::dot( deltaUV, deltaUV ) < MIN_STEP * MIN_STEP ) {
+        break;
+      }
+    }
+
+    return bestGuess;
+  }
+
+};
+
+
+/*inline double InverseMethod(glm::dvec3 pt, const tinynurbs::RationalSurface3d& srf,
                             double pr, double rotations, double minError,
                             double maxError, double &fU, double &fV,
                             double &divisor, double maxDistance) {
@@ -961,49 +1090,51 @@ inline double InverseMethod(glm::dvec3 pt, const tinynurbs::RationalSurface3d& s
     // printf("minError: %.3f\n", minError);
   }
   return maxDistance;
-}
+}*/
 
-inline glm::dvec2 BSplineInverseEvaluation(glm::dvec3 pt,
-                                           const tinynurbs::RationalSurface3d& srf,
-                                           double scaling) {
-  glm::highp_dvec3 ptc = tinynurbs::surfacePoint(srf, 0.0, 0.0);
-  glm::highp_dvec3 pth = tinynurbs::surfacePoint(srf, 1.0, 0.0);
-  glm::highp_dvec3 ptv = tinynurbs::surfacePoint(srf, 0.0, 1.0);
+// inline glm::dvec2 BSplineInverseEvaluation(glm::dvec3 pt,
+//                                            const tinynurbs::RationalSurface3d& srf,
+//                                            double scaling) {
+//   glm::highp_dvec3 ptc = tinynurbs::surfacePoint(srf, 0.0, 0.0);
+//   glm::highp_dvec3 pth = tinynurbs::surfacePoint(srf, 1.0, 0.0);
+//   glm::highp_dvec3 ptv = tinynurbs::surfacePoint(srf, 0.0, 1.0);
 
-  double dh = glm::distance(ptc, pth);
-  double dv = glm::distance(ptc, ptv);
-  double pr = (dh + 1) / (dv + 1);
+//   double dh = glm::distance(ptc, pth);
+//   double dv = glm::distance(ptc, ptv);
+//   double pr = (dh + 1) / (dv + 1);
 
-  double minError = 0.00001;
-  double maxError = 0.001;
-  double rotations = 6;
+//   double minError = 0.00001;
+//   double maxError = 0.001;
+//   double rotations = 6;
 
-  double fU = 0.5;
-  double fV = 0.5;
-  double divisor = 100.0;
-  double maxDistance = 1e+100;
+//   double fU = 0.5;
+//   double fV = 0.5;
+//   double divisor = 100.0;
+//   double maxDistance = 1e+100;
 
-  //printf("scaling: %.3f\n", scaling);
-  maxDistance =
-    InverseMethod(
-        pt,
-        srf,
-        pr,
-        rotations,
-        minError / scaling,
-        maxError / scaling,
-        fU,
-        fV,
-        divisor,
-        maxDistance );
+//   //printf("scaling: %.3f\n", scaling);
+//   maxDistance =
+//     InverseMethod(
+//         pt,
+//         srf,
+//         pr,
+//         rotations,
+//         minError / scaling,
+//         maxError / scaling,
+//         fU,
+//         fV,
+//         divisor,
+//         maxDistance );
 
-  return glm::dvec2(fU, fV);
-}
+//   return glm::dvec2(fU, fV);
+// }
 
 // TODO: review and simplify
 inline void TriangulateBspline(Geometry &geometry,
                                const std::vector<IfcBound3D> &bounds,
                                IfcSurface &surface, double scaling) {
+
+//  printf( "Triangulating BSpline Surface\n" );
 
   tinynurbs::RationalSurface3d srf;
   srf.degree_u = surface.BSplineSurface.UDegree;
@@ -1048,6 +1179,11 @@ inline void TriangulateBspline(Geometry &geometry,
   }
 
   // If the NURBS surface is valid we continue
+  
+
+//  printf( "Evaluating inverse parameter space\n" );
+
+  RationalNurbsInverseMethod bSplineInverseEvaluation( srf );
 
   if (tinynurbs::surfaceIsValid(srf)) {
     // Find projected boundary using NURBS inverse evaluation
@@ -1071,7 +1207,7 @@ inline void TriangulateBspline(Geometry &geometry,
         pt.y *= scaling;
         pt.z *= scaling;
 
-        glm::dvec2 pInv = BSplineInverseEvaluation(pt, srf, 1.0f);
+        glm::dvec2 pInv = bSplineInverseEvaluation( pt );
 
         points.push_back({pInv.x, pInv.y});
         mesh.makeVertex( { pt, pInv } );
@@ -1079,6 +1215,8 @@ inline void TriangulateBspline(Geometry &geometry,
 
       uvBoundaryValues.push_back(points);
     }
+
+  //  printf( "Earcutting parameter space %zu\n", mesh.vertices.size() );
 
     // Triangulate projected boundary
     // Subdivide resulting triangles to increase definition
@@ -1094,6 +1232,8 @@ inline void TriangulateBspline(Geometry &geometry,
         indices[ i  + 1 ], 
         indices[ i  + 2 ] );
     }
+    
+  //  printf( "Tesselating BSpline Surface\n" );
 
     tesselate(
       mesh,
@@ -1104,6 +1244,9 @@ inline void TriangulateBspline(Geometry &geometry,
       MAX_DEFLECTION );
 
     appendMeshToGeometry( mesh, geometry, !surface.sameSense );
+
+  //  printf( "Tesselated BSpline Surface with %zu triangles\n", mesh.triangles.size() );
+
 
   } else {
     Logger::logError( "Surface was not valid!\n");

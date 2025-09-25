@@ -646,6 +646,8 @@ class ConwayGeometryProcessor {
   conway::geometry::IfcCurve getIfcLine(const ParamsGetIfcLine& parameters);
 
   conway::geometry::IfcCurve getIfcCircle(const ParamsGetIfcCircle& parameters);
+  
+  conway::geometry::IfcCurve getAP214Circle(const ParamsGetIfcCircle& parameters);
 
   struct ParamsGetBSplineCurve {
     uint32_t dimensions;

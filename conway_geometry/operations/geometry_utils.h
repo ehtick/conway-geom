@@ -617,31 +617,20 @@ inline void TriangulateBounds(Geometry &geometry,
 
     // if more than one bound
     if (bounds.size() > 1) {
-      // locate the outer bound index
-
+        // locate the outer bound index
       int outerIndex = -1;
- 
-      size_t i = 0;
-
-      while ( i < bounds.size() ) {
-
-        if ( bounds[i].type == IfcBoundType::OUTERBOUND ) {
+      for (size_t i = 0; i < bounds.size(); i++) {
+        if (bounds[i].type == IfcBoundType::OUTERBOUND) {
           outerIndex = i;
           break;
         }
-
-        i++;
       }
 
-      if ( outerIndex == -1 && bounds.size() > 1 ) {
+      if (outerIndex == -1) {
         Logger::logWarning("Expected outer bound!");
       } else {
-
-        if ( outerIndex != 0 ) {
-
-          // swap the outer bound to the first position
-          std::swap(bounds[0], bounds[outerIndex]);
-        }
+        // swap the outer bound to the first position
+        std::swap(bounds[0], bounds[outerIndex]);
       }
     }
 
@@ -650,18 +639,40 @@ inline void TriangulateBounds(Geometry &geometry,
     if (!GetBasisFromCoplanarPoints(bounds[0].curve.points, v1, v2, v3)) {
       // these points are on a line
 
-       Logger::logError("No basis found for brep!");
+      Logger::logError("No basis found for brep!");
       return;
     }
 
     glm::dvec3 v12(glm::normalize(v3 - v2));
     glm::dvec3 v13(glm::normalize(v1 - v2));
     glm::dvec3 n = glm::normalize(glm::cross(v12, v13));
+
     v12 = glm::cross(v13, n);
+    
+    // check winding of outer bound
+    IfcCurve test;
+
+    for (size_t i = 0; i < bounds[0].curve.points.size(); i++) {
+      glm::dvec3 pt = bounds[0].curve.points[i];
+      glm::dvec3 pt2 = pt - v1;
+
+      glm::dvec2 proj(glm::dot(pt2, v12), glm::dot(pt2, v13));
+
+      test.Add2d( proj );
+    }
+
+    // if the outer bound is clockwise under the current projection (v12,v13,n),
+    // we invert the projection
+    if (!test.IsCCW()) {
+      n *= -1;
+      std::swap(v12, v13);
+    }
 
     // if the first bound is not an outer bound now, this is unexpected
-    if ( bounds[0].type != IfcBoundType::OUTERBOUND ) {
-      
+    if ( bounds[0].type != IfcBoundType::OUTERBOUND && bounds.size() > 1 ) {
+            
+      Logger::logError("Fall-back tesselation with unknown outbound!");
+
       tesselatePlane(
         geometry, bounds, [&]( const glm::dvec3& vertex ) {
 
@@ -672,31 +683,11 @@ inline void TriangulateBounds(Geometry &geometry,
 
       return;
     }
-
-    // check winding of outer bound
-    IfcCurve test;
-
-    for (size_t i = 0; i < bounds[0].curve.points.size(); i++) {
-      glm::dvec3 pt = bounds[0].curve.points[i];
-      glm::dvec3 pt2 = pt - v1;
-
-      glm::dvec2 proj(glm::dot(pt2, v12), glm::dot(pt2, v13));
-
-      test.points.emplace_back( proj, 0.0 );
-    }
-
-    // if the outer bound is clockwise under the current projection (v12,v13,n),
-    // we invert the projection
-    if (!test.IsCCW()) {
-      n *= -1;
-      std::swap(v12, v13);
-    }
     
     // if the first bound is not an outer bound now, this is unexpected
     if ( bounds[0].type != IfcBoundType::OUTERBOUND && bounds.size() > 1 ) {
       Logger::logWarning("Expected outer bound first!");
     }
-
 
     for (auto &bound : bounds) {
 

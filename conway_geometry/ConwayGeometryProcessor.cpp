@@ -2232,7 +2232,221 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcLine(
   return curve;
 }
 
+
 conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
+    const ParamsGetIfcCircle &parameters) {
+  conway::geometry::IfcCurve curve;
+
+  double radius1 = parameters.radius;
+  double radius2 = parameters.radius2;
+
+  double startDegrees = 0;
+  double endDegrees = 360;
+
+  bool byPos = false;
+
+  int startOffset   = 0;
+  int endOffset     = 0;
+  bool isTrimmed360 = false;
+
+  if (parameters.paramsGetIfcTrimmedCurve.trimExists)
+  {
+    if (parameters.paramsGetIfcTrimmedCurve.masterRepresentation ==
+      IfcTrimmingPreference::PARAMETER) {
+      startDegrees = parameters.paramsGetIfcTrimmedCurve.trim1Double;
+      endDegrees = parameters.paramsGetIfcTrimmedCurve.trim2Double;
+      
+    }
+    else
+    {
+      byPos = true;
+
+      if (parameters.dimensions == 2)
+      {
+        glm::dmat3 placement = parameters.axis2Placement2D;
+        double xx = parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D.x - placement[2].x;
+        double yy = parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D.y - placement[2].y;
+        startDegrees = VectorToAngle2D(xx, yy);
+        xx = parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D.x - placement[2].x;
+        yy = parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D.y - placement[2].y;
+        endDegrees = VectorToAngle2D(xx, yy);
+
+        startOffset = 1;
+        endOffset = -1;
+        
+        curve.Add2d( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D );
+      }
+      else if (parameters.dimensions == 3)
+      {
+        glm::dmat4 placement = parameters.axis2Placement3D;
+        glm::dvec3 vecX = placement[0];
+        glm::dvec3 vecY = placement[1];
+
+        glm::dvec3 v1 =
+            glm::dvec3(parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D.x -
+                          placement[3].x,
+                      parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D.y -
+                          placement[3].y,
+                      parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D.z -
+                          placement[3].z);
+        glm::dvec3 v2 =
+            glm::dvec3(parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D.x -
+                          placement[3].x,
+                      parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D.y -
+                          placement[3].y,
+                      parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D.z -
+                          placement[3].z);
+
+        double dxS = glm::dot(vecX, v1);
+        double dyS = glm::dot(vecY, v1);
+        // double dzS = vecZ.x * v1.x + vecZ.y * v1.y + vecZ.z * v1.z;
+
+        double dxE = glm::dot(vecX, v2);
+        double dyE = glm::dot(vecY, v2);
+        // double dzE = vecZ.x * v2.x + vecZ.y * v2.y + vecZ.z * v2.z;
+
+        endDegrees   = VectorToAngle(dxS, dyS) - 90;
+        startDegrees = VectorToAngle(dxE, dyE) - 90;
+        
+        if ( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D == 
+            parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D ) {
+
+          isTrimmed360 = true;
+
+          if ( parameters.paramsGetIfcTrimmedCurve.senseAgreement ) {
+            endDegrees += 360;
+          } else {
+            startDegrees += 360;
+          }
+        }
+
+        startOffset = 1;
+        endOffset = -1;
+            
+        curve.Add3d( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian3D );
+      }
+    }
+  }
+
+  while (startDegrees < 0)
+  {
+    startDegrees += 360;
+  }
+
+  while (endDegrees < 0)
+  {
+    endDegrees += 360;
+  }
+
+  while (startDegrees > 360)
+  {
+    startDegrees -= 360;
+  }
+
+  while (endDegrees > 360)
+  {
+    endDegrees -= 360;
+  }
+
+  double lengthDegrees = 0;      
+
+  if (parameters.paramsGetIfcTrimmedCurve.senseAgreement)
+  {
+    if (startDegrees > endDegrees)
+    {
+      endDegrees += 360;
+    }
+    lengthDegrees = endDegrees - startDegrees; 
+
+  }
+  else
+  {
+    if (startDegrees < endDegrees)
+    {
+      startDegrees += 360;
+    }
+    lengthDegrees = endDegrees - startDegrees;
+  }
+
+  if (isTrimmed360) {
+    lengthDegrees = 360.0;
+  }
+  
+  if ( parameters.paramsGetIfcTrimmedCurve.trimExists &&
+       parameters.paramsGetIfcTrimmedCurve.senseAgreement &&
+       parameters.isEdge ) {
+    // if this is an edge, we reverse the curve   
+      
+    lengthDegrees = -lengthDegrees;
+    
+    std::swap(startDegrees, endDegrees);
+  }
+
+  double startRad = degreesToRadians(startDegrees);
+  double lengthRad = degreesToRadians(lengthDegrees);
+
+  size_t startIndex = curve.points.size();
+
+  for (int i = startOffset; i < ( CIRCLE_SEGMENTS_MEDIUM + endOffset ); i++)
+  { 
+    double ratio = static_cast<double>(i) / (CIRCLE_SEGMENTS_MEDIUM - 1);
+    double angle = startRad + ratio * lengthRad;
+
+    if (parameters.dimensions == 2)
+    {
+      glm::dvec2 vec(0);
+      vec[0] = radius1 * std::cos(angle);
+      vec[1] = radius2 * std::sin(angle); // not sure why we need this, but we apparently do
+      glm::dmat3 dmat = parameters.axis2Placement2D;
+      // If trimming by points no rotation is required
+      if (byPos)
+      {
+        dmat[0] = glm::dvec3(1.0, 0.0, 0.0); // Assigning [1, 0, 0] to the X vector
+        dmat[1] = glm::dvec3(0.0, 1.0, 0.0); // Assigning [0, 1, 0] to the Y vector
+      }
+      glm::dvec2 pos = dmat * glm::dvec3(vec, 1);
+      curve.Add2d(pos);
+    }
+    else
+    {
+      glm::dvec3 vec(0);
+      vec[0] = radius1 * std::cos(angle);
+      vec[1] = -radius2 * std::sin(angle); // negative or not???
+      glm::dvec3 pos = parameters.axis2Placement3D * glm::dvec4(glm::dvec3(vec), 1);
+      curve.Add3d(pos);
+    }
+  }
+
+  // without a trim, we close the circle
+  if ( !parameters.paramsGetIfcTrimmedCurve.trimExists ) 
+  {
+    if (parameters.dimensions == 2) {
+      curve.Add2d(curve.points[startIndex]);
+    }
+    else {
+      curve.Add3d(curve.points[startIndex]);
+    }
+  } else if ( endOffset != 0 ) {
+
+    if (parameters.dimensions == 2) {
+      curve.Add2d(parameters.paramsGetIfcTrimmedCurve.trim2Cartesian2D);
+    } else {
+      curve.Add3d(parameters.paramsGetIfcTrimmedCurve.trim2Cartesian3D);
+    }
+  }
+
+  if ( parameters.paramsGetIfcTrimmedCurve.trimExists && 
+       parameters.paramsGetIfcTrimmedCurve.senseAgreement &&
+       parameters.isEdge ) {
+    // if this is an edge, we reverse the curve
+    std::reverse(curve.points.begin(), curve.points.end());
+  }
+
+  return curve;
+}
+
+
+conway::geometry::IfcCurve ConwayGeometryProcessor::getAP214Circle(
     const ParamsGetIfcCircle &parameters) {
   conway::geometry::IfcCurve curve;
 
@@ -2274,11 +2488,12 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
         glm::dvec2 v1 = glm::normalize( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D - centre );
         glm::dvec2 v2 = glm::normalize( parameters.paramsGetIfcTrimmedCurve.trim2Cartesian2D - centre );
 
-        double dxS = v1.x;
-        double dyS = v1.y;
+        double dxS = glm::dot(vecX, v1);
+        double dyS = glm::dot(vecY, v1);
+        // double dzS = vecZ.x * v1.x + vecZ.y * v1.y + vecZ.z * v1.z;
 
-        double dxE = v2.x;
-        double dyE = v2.y;
+        double dxE = glm::dot(vecX, v2);
+        double dyE = glm::dot(vecY, v2);
 
         startDegrees = 180.0 * atan2( dyS, dxS ) / M_PI;
         endDegrees   = 180.0 * atan2( dyE, dxE ) / M_PI;
@@ -2293,25 +2508,6 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getIfcCircle(
           }
         }
 
-        while (startDegrees < 0)
-        {
-          startDegrees += 360;
-        }
-
-        while (endDegrees < 0)
-        {
-          endDegrees += 360;
-        }
-
-        while (startDegrees > 360)
-        {
-          startDegrees -= 360;
-        }
-
-        while (endDegrees > 360)
-        {
-          endDegrees -= 360;
-        }
 
         startOffset = 1;
         endOffset = -1;
