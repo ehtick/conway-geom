@@ -92,6 +92,7 @@ struct Geometry {
   uint32_t GetIndexDataSize();
   glm::dvec3 Normalize();
   uint32_t GetVertexCount() const { return static_cast< uint32_t >( vertices.size() ); }
+  uint32_t GetTriangleCount() const { return static_cast< uint32_t >( triangles.size() ); }
   void ApplyTransform( const glm::dmat4x4& transform );
 
   void ApplyRescale( const glm::dvec3& scale, const glm::dvec3& origin = glm::dvec3( 0 ) );

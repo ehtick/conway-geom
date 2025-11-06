@@ -924,28 +924,65 @@ constexpr double MAX_ERROR           = 0.001;
 constexpr double ALPHA_ERROR         = 1e-6;
 constexpr double MIN_STEP            = 1e-9;
 
-constexpr double MAX_ITERATION       = 50;
+constexpr size_t MAX_ITERATION       = 50;
 
 struct RationalNurbsInverseMethod {
 
   glm::dvec3 grid[ INVERSE_GRID_SIDE ][ INVERSE_GRID_SIDE ];
   const tinynurbs::RationalSurface3d& surface;
 
+  glm::dvec2 min_extent;
+  glm::dvec2 max_extent;
+
   RationalNurbsInverseMethod( const tinynurbs::RationalSurface3d& srf ) : surface( srf ) {
+
+    size_t degreeU = static_cast< size_t >( srf.degree_u );
+    size_t degreeV = static_cast< size_t >( srf.degree_v );
+   
+    if ( srf.knots_u.size() == 2 ) {
+   
+      degreeU = 0;
+
+    }
+
+    if ( srf.knots_v.size() == 2 ) {
+
+      degreeV = 0;
+
+    }
+
+    min_extent = glm::dvec2( 
+      srf.knots_u.size() < degreeU ? srf.knots_u[ degreeU ] : 0.0,
+      srf.knots_v.size() < degreeV ? srf.knots_v[ degreeV ] : 0.0 );
+
+    size_t uM = srf.knots_u.size() - ( degreeU + 1 );
+    size_t vM = srf.knots_v.size() - ( degreeV + 1 );
+
+    max_extent = glm::dvec2( 
+      srf.knots_u.size() < uM ? srf.knots_u[ srf.knots_u.size() - ( degreeU + 1 ) ] : 1.0,
+      srf.knots_v.size() < vM ? srf.knots_v[ srf.knots_v.size() - ( degreeV + 1 ) ] : 1.0 );
+
 
     for ( size_t i = 0; i < INVERSE_GRID_SIDE; ++i ) {
       for ( size_t j = 0; j < INVERSE_GRID_SIDE; ++j ) {
 
+        glm::dvec2 uv = 
+          min_extent + 
+          ( max_extent - min_extent ) * 
+          glm::dvec2( 
+            static_cast< double >( i ) * INVERSE_GRID_FACTOR,
+            static_cast< double >( j ) * INVERSE_GRID_FACTOR );
+
         grid[ i ][ j ] =
           tinynurbs::surfacePoint(
             srf,
-            static_cast< double >( i ) * INVERSE_GRID_FACTOR,
-            static_cast< double > ( j ) * INVERSE_GRID_FACTOR );
+            uv.x,
+            uv.y );
       }
     }
   }
 
-  glm::dvec2 operator()( const glm::dvec3& point ) {
+  glm::dvec2 operator()( const glm::dvec3& point ) const {
 
     glm::dvec2 bestGuess;
     glm::dvec3 bestPoint;
@@ -962,7 +999,9 @@ struct RationalNurbsInverseMethod {
         if ( distance2 < minDistance2 ) {
 
           bestGuess =
-            glm::dvec2(
+            min_extent + 
+            ( max_extent - min_extent ) * 
+            glm::dvec2( 
               static_cast< double >( i ) * INVERSE_GRID_FACTOR,
               static_cast< double >( j ) * INVERSE_GRID_FACTOR );
 
@@ -975,6 +1014,9 @@ struct RationalNurbsInverseMethod {
     size_t iteration = 0;
 
     double damping = 1e-6;
+
+    // glm::dvec2 alphaUV    = max_extent - min_extent;
+    // double     startAlpha = 1.0 / std::max( alphaUV.x, alphaUV.y );
 
     while ( minDistance2 > MAX_ERROR * MAX_ERROR && iteration++ < MAX_ITERATION ) {
 
@@ -997,7 +1039,7 @@ struct RationalNurbsInverseMethod {
 
       glm::dvec2 deltaUV = robust_2x2_solve( jtj, jte );
 
-      double alpha = 1.0;
+      double alpha = 1.0;//startAlpha;
       double phi   = 0.5 * minDistance2;
 
       bool success = false;
@@ -1006,8 +1048,7 @@ struct RationalNurbsInverseMethod {
 
         glm::dvec2 newGuessUV = bestGuess - deltaUV * alpha;
 
-        newGuessUV.x = std::clamp( newGuessUV.x, 0.0, 1.0 );
-        newGuessUV.y = std::clamp( newGuessUV.y, 0.0, 1.0 );
+        newGuessUV = glm::clamp( newGuessUV, min_extent, max_extent );
 
         glm::dvec3 newPoint =
           tinynurbs::surfacePoint( surface, newGuessUV.x, newGuessUV.y );
@@ -1137,17 +1178,20 @@ inline void TriangulateBspline(Geometry &geometry,
 //  printf( "Triangulating BSpline Surface\n" );
 
   tinynurbs::RationalSurface3d srf;
+  
   srf.degree_u = surface.BSplineSurface.UDegree;
   srf.degree_v = surface.BSplineSurface.VDegree;
   size_t num_u = surface.BSplineSurface.ControlPoints.size();
   size_t num_v = surface.BSplineSurface.ControlPoints[0].size();
 
   std::vector<glm::dvec3> controlPoints;
-  for (std::vector<glm::dvec3> row : surface.BSplineSurface.ControlPoints) {
+
+  for ( std::vector<glm::dvec3> row : surface.BSplineSurface.ControlPoints ) {
     for (glm::dvec3 point : row) {
       controlPoints.push_back({point.x, point.y, point.z});
     }
   }
+
   srf.control_points = tinynurbs::array2(num_u, num_v, controlPoints);
 
   std::vector<double> weights;

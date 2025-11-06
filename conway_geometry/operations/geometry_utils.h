@@ -627,12 +627,13 @@ inline void TriangulateBounds(Geometry &geometry,
       }
 
       if (outerIndex == -1) {
-        Logger::logWarning("Expected outer bound!");
+        Logger::logWarning( "Expected outer bound, using fallback tesselation." );
       } else {
         // swap the outer bound to the first position
         std::swap(bounds[0], bounds[outerIndex]);
       }
     }
+
 
     glm::dvec3 v1, v2, v3;
 
@@ -671,15 +672,30 @@ inline void TriangulateBounds(Geometry &geometry,
     // if the first bound is not an outer bound now, this is unexpected
     if ( bounds[0].type != IfcBoundType::OUTERBOUND && bounds.size() > 1 ) {
             
-      Logger::logError("Fall-back tesselation with unknown outbound!");
+      if ( geometry.vertices.empty() && geometry.triangles.empty() ) {
 
-      tesselatePlane(
-        geometry, bounds, [&]( const glm::dvec3& vertex ) {
+        tesselatePlane(
+          geometry, bounds, [&]( const glm::dvec3& vertex ) {
 
-          glm::dvec3 pt2 = vertex - v1;
+            glm::dvec3 pt2 = vertex - v1;
 
-          return glm::dvec2(glm::dot(pt2, v12), glm::dot(pt2, v13));
-        } );
+            return glm::dvec2(glm::dot(pt2, v12), glm::dot(pt2, v13));
+          } );
+
+      } else {
+
+        Geometry intermediate;
+
+        tesselatePlane(
+          intermediate, bounds, [&]( const glm::dvec3& vertex ) {
+
+            glm::dvec3 pt2 = vertex - v1;
+
+            return glm::dvec2(glm::dot(pt2, v12), glm::dot(pt2, v13));
+          } );
+
+        geometry.AppendGeometry( intermediate );
+      }
 
       return;
     }

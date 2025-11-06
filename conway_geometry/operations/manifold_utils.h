@@ -8,6 +8,7 @@
 #include "representation/Geometry.h"
 #include "representation/IfcGeometryReps.h"
 #include "structures/hash_functions.h"
+#include "representation/ConwayCurve.h"
 
 #include <iostream>
 #include <fstream>
@@ -39,10 +40,13 @@ namespace conway::geometry
 
     uint32_t vertex1;
     uint32_t vertex2;
+    uint32_t loop;
 
-    LoopEdge(uint32_t v1, uint32_t v2) : vertex1(v1), vertex2(v2)
+    LoopEdge(uint32_t v1, uint32_t v2, uint32_t _loop = EMPTY_INDEX) :
+      vertex1(v1),
+      vertex2(v2),
+      loop( _loop )
     {
-
       if (v2 < v1)
       {
         std::swap(vertex1, vertex2);
@@ -79,6 +83,8 @@ namespace conway::geometry
     std::vector<glm::dvec3> &vertices  = output.vertices;
     std::vector< LoopEdge > &loopEdges = boundaryMesh.loopEdges;
 
+    uint32_t loopIndex = 0;
+ 
      // Build connected edge structure with unique vertices from boundary loops.
     for ( const IfcBound3D &boundary : boundaries )
     {
@@ -121,17 +127,19 @@ namespace conway::geometry
           continue;
         }
         
-        loopEdges.emplace_back( previousVertexIndex, vertexIndex );
+        loopEdges.emplace_back( previousVertexIndex, vertexIndex, loopIndex );
         
         previousVertexIndex = vertexIndex;
       }
 
       if ( previousVertexIndex != firstIndexInLoop )
       {
-        loopEdges.emplace_back( previousVertexIndex, firstIndexInLoop );
+        loopEdges.emplace_back( previousVertexIndex, firstIndexInLoop, loopIndex );
       }
-    }
 
+      ++loopIndex;
+    }
+    
     std::vector< glm::dvec2 > parameterizationVertices;
 
     size_t vertexCount = vertices.size();
@@ -156,7 +164,7 @@ namespace conway::geometry
     // Setup constraints, discard illegal edges and remap vertices for CDT.
     for ( const LoopEdge &loopEdge : boundaryMesh.loopEdges )
     {
-      auto [ v1, v2 ] = loopEdge;
+      auto [ v1, v2, _ ] = loopEdge;
 
       const glm::dvec2 &param1 = parameterizationVertices[ v1 ];
       const glm::dvec2 &param2 = parameterizationVertices[ v2 ];
@@ -279,7 +287,7 @@ namespace conway::geometry
       triangulation.insertVertices( cdtVertices );
       triangulation.insertEdges( cdtEdges );
 
-      triangulation.eraseOuterTrianglesAndHoles();
+      triangulation.eraseSuperTriangle();
     }
     catch (const CDT::IntersectingConstraintsError &e) {
 
@@ -317,6 +325,210 @@ namespace conway::geometry
 
       output.MakeTriangle( v1, v2, v3 );
     }
+    
+    std::unordered_map< uint64_t, uint32_t > loopEdgeSet;
+
+    loopEdgeSet.reserve( boundaryMesh.loopEdges.size() );
+    
+    output.EnableConnectivity();
+
+    for ( const LoopEdge& loopEdge : loopEdges )
+    {
+      uint64_t edgeID =
+        edgeCompoundID(
+          loopEdge.vertex1,
+          loopEdge.vertex2 );
+
+      loopEdgeSet.insert( { edgeID, loopEdge.loop } );
+    }
+
+    std::vector< bool > toDelete( output.triangles.size(), false );
+    std::vector< bool > touched( output.triangles.size(), false );
+
+    std::stack< uint32_t > triangleStack;
+
+    uint64_t outerBoundaryIndex = EMPTY_INDEX;
+
+    // Find triangle that has a free edge that is off the boundary loop.
+    for ( uint32_t triangleIndex = 0, 
+                   end = static_cast< uint32_t >( output.triangles.size() );
+     triangleIndex < end;
+     ++triangleIndex )
+    {
+      const TriangleEdges& triangle = output.triangle_edges[ triangleIndex ];
+
+      for ( uint32_t edgeInTriangle = 0; edgeInTriangle < 3; ++edgeInTriangle )
+      {
+        const Edge& edge = output.edges[ triangle.edges[ edgeInTriangle ] ];
+
+        if ( edge.otherTriangle( triangleIndex ) != EMPTY_INDEX )
+        {
+          continue;
+        }
+
+        uint64_t edgeID = edge.compoundID();
+
+        auto foundLoopEdge = loopEdgeSet.find( edgeID );
+
+        if ( foundLoopEdge == loopEdgeSet.end() )
+        {
+          toDelete[ triangleIndex ] = true; // Mark triangle for deletion.
+          touched[ triangleIndex ]  = true; // Mark triangle as touched.
+
+          triangleStack.push( triangleIndex ); 
+          break;
+        } else if ( outerBoundaryIndex == EMPTY_INDEX ) {
+          outerBoundaryIndex = foundLoopEdge->second;
+        }
+      }
+    }
+
+    bool flipMesh = false;
+
+    if ( outerBoundaryIndex != EMPTY_INDEX ) {
+
+      IfcCurve test;
+
+      const IfcBound3D& outerBounds = boundaries[ outerBoundaryIndex ];
+
+      for ( const glm::dvec3& pt : outerBounds.curve.points) {
+
+        glm::dvec2 proj = parameterization( pt );
+
+        test.Add2d( proj );
+      }
+
+      // if the outer bound is clockwise under the current projection (v12,v13,n),
+      // we invert the projection
+      if (!test.IsCCW()) {
+        
+        flipMesh = true;
+      }
+    }
+    
+    // Mark triangles that are connected to triangles outside the outer
+    // loop deleted by traversing connectivity.
+    while ( !triangleStack.empty() )
+    {
+      uint32_t triangleIndex = triangleStack.top();
+
+      triangleStack.pop();
+
+      const TriangleEdges& triangle = output.triangle_edges[ triangleIndex ];
+
+      for ( uint32_t edgeInTriangle = 0; edgeInTriangle < 3; ++edgeInTriangle )
+      {
+        const Edge& edge = output.edges[ triangle.edges[ edgeInTriangle ] ];
+
+        if ( loopEdgeSet.count( edge.compoundID() ) > 0 )
+        {
+          continue; // Edge is part of the loop, skip it.
+        }
+
+        uint32_t otherTriangleIndex = edge.otherTriangle( triangleIndex );
+
+        if ( otherTriangleIndex != EMPTY_INDEX )
+        {
+          if ( touched[ otherTriangleIndex ] )
+          {
+            continue; // Triangle already processed.
+          }
+
+          touched[ otherTriangleIndex ]  = true; // Mark triangle as touched.
+          toDelete[ otherTriangleIndex ] = true; // Mark triangle for deletion.
+
+          triangleStack.push( otherTriangleIndex ); // Add to stack for processing.
+        }
+      }
+    }
+   
+    // Find triangle that has a free edge but is on the loop.
+    for ( uint32_t triangleIndex = 0, 
+                   end = static_cast< uint32_t >( output.triangles.size() );
+     triangleIndex < end;
+     ++triangleIndex )
+    {
+      const TriangleEdges& triangle = output.triangle_edges[ triangleIndex ];
+
+      if ( touched[ triangleIndex ] )
+      {
+        continue; // Triangle already processed.
+      }
+
+      for ( uint32_t edgeInTriangle = 0; edgeInTriangle < 3; ++edgeInTriangle )
+      {
+        const Edge& edge = output.edges[ triangle.edges[ edgeInTriangle ] ];
+
+        if ( edge.otherTriangle( triangleIndex ) != EMPTY_INDEX )
+        {
+          continue;
+        }
+
+        if ( loopEdgeSet.count( edge.compoundID() ) > 0 )
+        {        
+          touched[ triangleIndex ]  = true; // Mark triangle as touched.
+
+          triangleStack.push( triangleIndex ); 
+          break;
+        }
+      }
+    }
+
+    // Mark triangles that are connected to triangles outside the outer
+    // loop deleted by traversing connectivity.
+    while ( !triangleStack.empty() )
+    {
+      uint32_t triangleIndex = triangleStack.top();
+
+      triangleStack.pop();
+
+      const TriangleEdges& triangle = output.triangle_edges[ triangleIndex ];
+
+      for ( uint32_t edgeInTriangle = 0; edgeInTriangle < 3; ++edgeInTriangle )
+      {
+        const Edge& edge = output.edges[ triangle.edges[ edgeInTriangle ] ];
+
+        if ( loopEdgeSet.count( edge.compoundID() ) > 0 )
+        {
+          continue; // Edge is part of the loop, skip it.
+        }
+
+        uint32_t otherTriangleIndex = edge.otherTriangle( triangleIndex );
+
+        if ( otherTriangleIndex != EMPTY_INDEX )
+        {
+          if ( touched[ otherTriangleIndex ] )
+          {
+            continue; // Triangle already processed.
+          }
+
+          touched[ otherTriangleIndex ]  = true; // Mark triangle as touched.
+
+          triangleStack.push( otherTriangleIndex ); // Add to stack for processing.
+        }
+      }
+    }    
+
+    // Go back through the triangles in reverse order and delete those marked for deletion,
+    // as deletion moves the last in vector to the current index.
+    for ( uint32_t triangleIndex1 = static_cast< uint32_t >( output.triangles.size() ); 
+          triangleIndex1 > 0; 
+          --triangleIndex1 )
+    {
+      uint32_t triangleIndex = triangleIndex1 - 1;
+
+      // If a triangle was marked for deletion, or wasn't touched in the walk,
+      // its outside the outer bounds or in a hole.
+      if ( toDelete[ triangleIndex ] || !touched[ triangleIndex ] )
+      {
+        output.DeleteTriangle( triangleIndex );
+      }
+    }
+
+    if ( flipMesh )
+    {
+      output.ReverseFaces();
+    }
   }  
 
   template <
@@ -332,7 +544,6 @@ namespace conway::geometry
       EquatorSideFunction equatorSide,
       DiscardEdgeFunction discardEdge)
   {
-
     std::vector< glm::dvec2 > &parameterizationVertices = outputMesh.vertices;
 
     size_t vertexCount = boundaryMesh.normalFormVertices.size();
@@ -377,7 +588,7 @@ namespace conway::geometry
     // Setup constraints, discard illegal edges and remap vertices for CDT.
     for ( const LoopEdge &loopEdge : boundaryMesh.loopEdges )
     {
-      auto [ v1, v2 ] = loopEdge;
+      auto [ v1, v2, _ ] = loopEdge;
 
       const glm::dvec3 &normal1 = normalFormVertices[ v1 ];
       const glm::dvec3 &normal2 = normalFormVertices[ v2 ];
@@ -476,7 +687,7 @@ namespace conway::geometry
     }
 
     CDT::Triangulation< double > triangulation(
-      CDT::VertexInsertionOrder::AsProvided,
+      CDT::VertexInsertionOrder::Auto,
       CDT::IntersectingConstraintEdges::NotAllowed, 0);
 
     try
@@ -719,7 +930,7 @@ namespace conway::geometry
       // Setup constraints for both sides for the equator seem, and remap vertices for CDT.
       for ( const LoopEdge &loopEdge : side0EquatorEdges )
       {
-        auto [ v1, v2 ] = loopEdge;
+        auto [ v1, v2, _ ] = loopEdge;
 
         const glm::dvec2 &param1 = parameterization1Vertices[ v1 ];
         const glm::dvec2 &param2 = parameterization1Vertices[ v2 ];
@@ -756,7 +967,7 @@ namespace conway::geometry
       // because they all need to be in a single frame of reference for the CDT.
       for ( const LoopEdge &loopEdge : side1EquatorEdges )
       {
-        auto [v1, v2] = loopEdge;
+        auto [ v1, v2, _ ] = loopEdge;
 
         const glm::dvec2 &param1 = parameterization1Vertices[ v1 ];
         const glm::dvec2 &param2 = parameterization1Vertices[ v2 ];
@@ -791,7 +1002,7 @@ namespace conway::geometry
 
       for ( const LoopEdge &loopEdge : loopEdges )
       {
-        auto [v1, v2] = loopEdge;
+        auto [v1, v2, _] = loopEdge;
 
         const glm::dvec3 &normal1 = normalFormVertices[ v1 ];
         const glm::dvec3 &normal2 = normalFormVertices[ v2 ];
@@ -1042,4 +1253,5 @@ namespace conway::geometry
     //       static_cast< int >( output.triangles.size() ),
     //       static_cast< int >( output.edges.size() ) );
   }
+
 }

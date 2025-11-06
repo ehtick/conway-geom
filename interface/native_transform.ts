@@ -23,14 +23,23 @@ export interface NativeTransform extends Deletable {
    * @param values The values to set.
    */
   setValues( values: ArrayLike<number> ): void
+
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface NativeTransform3x3 extends NativeTransform {
 
+  transpose(): NativeTransform3x3
+  
+  uniformScale( factor: number ): NativeTransform3x3
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface NativeTransform4x4 extends NativeTransform {
 
+  transpose(): NativeTransform4x4
+  
+  invert(): NativeTransform4x4
+
+  uniformScale( factor: number ): NativeTransform4x4
 }

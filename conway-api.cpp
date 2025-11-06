@@ -56,6 +56,21 @@ glm::dmat4 multiplyNativeMatrices(glm::dmat4 mat1, glm::dmat4 mat2) {
   return mat1 * mat2;
 }
 
+glm::dmat4 uniformScale4x4( const glm::dmat4& mat, double factor ) {
+    return mat * glm::dmat4(
+        factor, 0, 0, 0,
+        0, factor, 0, 0,
+        0, 0, factor, 0,
+        0, 0, 0, 1 );
+}
+
+glm::dmat4 uniformScale3x3( const glm::dmat3& mat, double factor ) {
+    return mat * glm::dmat3(
+        factor, 0, 0,
+        0, factor, 0,
+        0, 0, 1 );
+}
+
 conway::geometry::Geometry GetSweptDiskSolid(
   conway::geometry::ConwayGeometryProcessor::ParamsGetSweptDiskSolid& parameters) {
     if (processor) {
@@ -831,6 +846,20 @@ void resizeVectorVectorDouble(std::vector<std::vector<double>>& vec, size_t newS
     vec.resize(newSize);
 }
 
+glm::dmat4 transpose4x4(const glm::dmat4& mat) {
+    return glm::transpose(mat);
+}
+
+
+glm::dmat4 invert4x4( const glm::dmat4& mat ) {
+    return glm::inverse( mat );
+}
+
+
+glm::dmat3 transpose3x3(const glm::dmat3& mat) {
+    return glm::transpose(mat);
+}
+
 EMSCRIPTEN_BINDINGS(my_module) {
   /*
     active: boolean
@@ -901,6 +930,7 @@ EMSCRIPTEN_BINDINGS(my_module) {
                 &conway::geometry::Geometry::GetVertexDataSize)
       .function("getPoint", &conway::geometry::Geometry::GetPoint)
       .function("getVertexCount", &conway::geometry::Geometry::GetVertexCount)
+      .function("getTriangleCount", &conway::geometry::Geometry::GetTriangleCount)
       .function("reify", &conway::geometry::Geometry::Reify)
       .function("clearReification", &conway::geometry::Geometry::ClearReification)
       .function("GetIndexData", &conway::geometry::Geometry::GetIndexData)
@@ -968,12 +998,17 @@ EMSCRIPTEN_BINDINGS(my_module) {
   emscripten::class_<glm::dmat4>("Glmdmat4")
       .constructor<>()
       .function("getValues", &getMatrixValues4x4)
-      .function("setValues", &setMatrixValues4x4);
+      .function("setValues", &setMatrixValues4x4)
+      .function("transpose", &transpose4x4 )
+      .function( "invert", &invert4x4 )
+      .function( "uniformScale", &uniformScale4x4 );
 
   emscripten::class_<glm::dmat3>("Glmdmat3")
       .constructor<>()
       .function("getValues", &getMatrixValues3x3)
-      .function("setValues", &setMatrixValues3x3);
+      .function("setValues", &setMatrixValues3x3)
+      .function("transpose", &transpose3x3 )
+      .function( "uniformScale", &uniformScale3x3 );
 
   emscripten::enum_<conway::geometry::BLEND_MODE>("BlendMode")
       .value("OPAQUE", conway::geometry::BLEND_MODE::BLEND_OPAQUE)
@@ -1652,14 +1687,6 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .field("exist", &conway::geometry::IfcTrimmingArguments::exist)
       .field("start", &conway::geometry::IfcTrimmingArguments::start)
       .field("end", &conway::geometry::IfcTrimmingArguments::end);
-
-  /**
-   * bool agreement = false;
-    double scaleFactor = 1.0;
-    conway::geometry::IfcCurve curve;
-    IfcSurface surface;
-    glm::dmat4 position;
-  */
 
   emscripten::value_object<conway::geometry::ConwayGeometryProcessor::ParamsGetPolygonalBoundedHalfspace>(
     "ParamsGetPolygonalBoundedHalfspace")

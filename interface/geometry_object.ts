@@ -9,6 +9,7 @@ export interface GeometryObject extends Deletable {
   GetVertexData: () => any
   getPoint(parameter: number): Vector3
   getVertexCount(): number
+  getTriangleCount(): number
 
   normalize(): Vector3
   GetVertexDataSize: () => number
