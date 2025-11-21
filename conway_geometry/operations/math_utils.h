@@ -25,6 +25,7 @@
 
 #endif
 
+#include <queue>
 
 namespace conway {
   
@@ -194,6 +195,194 @@ namespace conway {
     return 0;
   }
 
+  template < typename T >
+  using GlmInterval = std::pair< T, T >;
+
+  template < typename T >
+  inline GlmInterval< T > make_interval( T start, T end ) {
+    return std::make_pair( start, end );
+  }
+
+  template < typename T >
+  inline GlmInterval< T > operator+( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( a.first + b.first, a.second + b.second );
+  }
+
+  template < typename T >
+  inline GlmInterval< T > operator-( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( a.first - b.first, a.second - b.second );
+  }
+
+  template < typename T >
+  inline GlmInterval< T > operator*( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( 
+      glm::min( 
+        glm::min( a.first * b.first, a.second * b.second ),
+        glm::min( a.first * b.second, a.second * b.first ) ), 
+      glm::max( 
+        glm::max( a.first * b.first, a.second * b.second ),
+        glm::max( a.first * b.second, a.second * b.first ) ) );
+  }
+  
+  template < typename T >
+  inline GlmInterval< T > operator/( const GlmInterval< T >& a, const GlmInterval< T >& b ) {
+
+    return std::make_pair( 
+      glm::min( 
+        glm::min( a.first / b.first, a.second / b.second ),
+        glm::min( a.first / b.second, a.second / b.first ) ), 
+      glm::max( 
+        glm::max( a.first / b.first, a.second / b.second ),
+        glm::max( a.first / b.second, a.second / b.first ) ) );
+  }
+
+
+  template < typename T >
+  inline GlmInterval< T > operator*( const GlmInterval< T >& a, double b ) {
+
+    return b >= 0 ?
+      std::make_pair( a.first * b, a.second * b ) :
+      std::make_pair( a.second * b, a.first * b );
+      
+  }
+
+  template < typename T >
+  inline double best_fit_param_bisection( T function, double start, double end, double tolerance = 1e-6 ) {
+
+    // if ( start > end ) {
+
+    //   std::swap( start, end );
+    // }
+
+    std::priority_queue< 
+      std::tuple< double, double, double >,
+      std::vector< std::tuple< double, double, double > >,
+      std::greater< std::tuple< double, double, double > > > best; 
+
+    // Start with a decent number of samples as simple bisection
+    // will not work will for functions that aren't unimodal.
+    for ( double where = 0; where < 32.0; ++where ) {
+
+      double a = start + ( end - start ) * where / 32.0;
+      double b = start + ( end - start ) * ( where + 1.0 ) / 32.0;
+
+      // We use the maximum of two values because it allows a bisection to be
+      // worse than the original values, which handles the concave case.
+      best.push( std::make_tuple( std::max( function( a ), function( b ) ), a, b ) );
+    }
+
+    while ( true ) {
+
+      auto [ distance, a, b ] = best.top();
+
+      double aF = function( a );
+      double bF = function( b );
+
+      if ( fabs( a - b ) < tolerance ) {
+
+        return aF < bF ? a : b; // Return the best fit parameter
+
+      }
+
+      best.pop();
+     
+      double mid = ( a + b ) / 2.0;
+
+      double midF = function( mid );
+
+      best.push( std::make_tuple( std::max( midF, aF ), a, mid ) );
+      best.push( std::make_tuple( std::max( midF, bF ), mid, b ) );
+    }
+  }
+
+  inline glm::dvec2 robust_2x2_solve( glm::dmat2x2 a, glm::dvec2 b ) {
+
+    double determinant = glm::determinant( a );
+
+    if ( glm::abs( determinant ) > DBL_EPSILON ) {
+
+      return glm::dvec2(
+        ( b.x * a[1][1] - b.y * a[0][1] ) / determinant,
+        ( a[0][0] * b.y - a[1][0] * b.x ) / determinant );
+    }
+
+    double ata11 = a[ 0 ][ 0 ] * a[ 0 ][ 0 ] + a[ 1 ][ 0 ] * a[ 1 ][ 0 ];
+    double ata12 = a[ 0 ][ 0 ] * a[ 0 ][ 1 ] + a[ 1 ][ 0 ] * a[ 1 ][ 1 ];
+    double ata22 = a[ 0 ][ 1 ] * a[ 0 ][ 1 ] + a[ 1 ][ 1 ] * a[ 1 ][ 1 ];
+
+    double determinant2 = ata11 * ata22 - ata12 * ata12;
+
+    if ( glm::abs( determinant2 ) > DBL_EPSILON ) {
+
+      double atb1 = a[ 0 ][ 0 ] * b.x + a[ 1 ][ 0 ] * b.y;
+      double atb2 = a[ 0 ][ 1 ] * b.x + a[ 1 ][ 1 ] * b.y;
+
+      return glm::dvec2(
+        ( atb1 * ata22 - atb2 * ata12 ) / determinant2,
+        ( ata11 * atb2 - ata12 * atb1 ) / determinant2 );
+    } else {
+
+      return glm::dvec2( 0.0, 0.0 );
+    }
+  }
+  
+  /** Will get the best 2D projection for a triangle that simply involves truncating an axis
+   *  As long as the triangle is non-zero area, given that orient2D is exact, it should
+   *  give us the truncated axis projection with the biggest area.
+   */
+  inline AxisPair best_truncated_projection( const glm::dvec3& v0, const glm::dvec3& v1, const glm::dvec3& v2 ) {
+
+    double bestValue = fabs( orient2D( v0, v1, v2, AxisPair::X_Y ) );
+
+    AxisPair result  = AxisPair::X_Y;
+
+    if ( double candidateValue = fabs( orient2D( v0, v1, v2, AxisPair::X_Z ) ); candidateValue > bestValue ) {
+
+      result    = AxisPair::X_Z;
+      bestValue = candidateValue;
+    }
+
+    if ( double candidateValue = fabs( orient2D( v0, v1, v2, AxisPair::Y_Z ) ); candidateValue > bestValue ) {
+
+      bestValue = candidateValue;
+      result = AxisPair::Y_Z;
+    }
+
+    if ( bestValue == 0.0 ) {
+      result = AxisPair::NONE;
+    }
+
+    return result;
+  }
+
+  /**
+   * Get the sign of the determinant in the 2D plane of the largest component of the triangle.
+   */
+  inline int32_t orient2D(const glm::dvec3& v0, const glm::dvec3& v1, const glm::dvec3& v2, double tolerance = 0 ) {
+
+    AxisPair axes        = best_truncated_projection( v0, v1, v2 );
+    double   orientation = orient2D( v0, v1, v2, axes );
+    
+    if ( axes == AxisPair::X_Z || axes == AxisPair::Y_Z ) {
+      orientation = -orientation;
+    }
+
+    if ( orientation > tolerance ) {
+
+      return 1;
+    }
+
+    if ( orientation < tolerance ) {
+
+      return -1;
+    }
+
+    return 0;
+  }
+
   /** Get the sign of the determinant for a pair of axes for a 3D triangle (i.e. a 2D triangle with an axis aligned ortho projection) */
   inline int32_t orient2D( const glm::dvec3(&vertices)[ 3 ], AxisPair axes, double tolerance = 0 ) {
 
@@ -271,8 +460,7 @@ namespace conway {
 
     return 2.0 * fast_atan2( y, x );
   }
-
-  
+    
   /**
    * Simple determininant based comparison given 4 points that will calculate 3 vectors relative to the first and then
    * work out the sign of the determinant within tolerance (-1 for negative, 0 for within tolerance of 0 and 1 for positive)

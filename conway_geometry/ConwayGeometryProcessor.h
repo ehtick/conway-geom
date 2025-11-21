@@ -130,6 +130,13 @@ class ConwayGeometryProcessor {
   Geometry BoolSubtractLegacy(const std::vector<Geometry>& firstGeoms,
                               std::vector<Geometry>& secondGeoms);
 
+  struct ParamsSphericalSurface {
+    uint32_t xLength = 0;
+    uint32_t yLength = 0;
+    uint32_t zLength = 0;
+    glm::dmat4 placement = glm::dmat4(1.0);
+  };
+
   struct ParamsGetBlock {
     uint32_t xLength = 0;
     uint32_t yLength = 0;
@@ -360,7 +367,12 @@ class ConwayGeometryProcessor {
     bool isRationalBsplineSurfaceWithKnots = false;
     std::vector<std::vector<glm::f64>> weightPts;
     bool isCylindricalSurface = false;
+    bool isSphericalSurface = false;
+    bool isToroidalSurface = false;
+    bool isConicalSurface = false;
     double radius = 0;
+    double radius2 = 0;  // For toroidal surface
+    double semiAngle = 0;  // For conical surface
     bool isSurfaceOfRevolution = false;
     glm::dmat4 revolutionDirection;
     IfcProfile revolutionProfile;
@@ -618,6 +630,7 @@ class ConwayGeometryProcessor {
     double radius;
     double radius2;
     ParamsGetIfcTrimmedCurve paramsGetIfcTrimmedCurve;
+    bool isEdge = false;
   };
 
   struct ParamsGetIfcLine {
@@ -633,6 +646,8 @@ class ConwayGeometryProcessor {
   conway::geometry::IfcCurve getIfcLine(const ParamsGetIfcLine& parameters);
 
   conway::geometry::IfcCurve getIfcCircle(const ParamsGetIfcCircle& parameters);
+  
+  conway::geometry::IfcCurve getAP214Circle(const ParamsGetIfcCircle& parameters);
 
   struct ParamsGetBSplineCurve {
     uint32_t dimensions;
@@ -641,8 +656,8 @@ class ConwayGeometryProcessor {
     std::vector<glm::dvec3> points3;
     std::vector<double> knots;
     std::vector<double> weights;
-    bool senseAgreement;
     bool isEdge;
+    ParamsGetIfcTrimmedCurve paramsGetIfcTrimmedCurve;
   };
 
   conway::geometry::IfcCurve getBSplineCurve(

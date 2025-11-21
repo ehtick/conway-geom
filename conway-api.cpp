@@ -56,6 +56,21 @@ glm::dmat4 multiplyNativeMatrices(glm::dmat4 mat1, glm::dmat4 mat2) {
   return mat1 * mat2;
 }
 
+glm::dmat4 uniformScale4x4( const glm::dmat4& mat, double factor ) {
+    return mat * glm::dmat4(
+        factor, 0, 0, 0,
+        0, factor, 0, 0,
+        0, 0, factor, 0,
+        0, 0, 0, 1 );
+}
+
+glm::dmat4 uniformScale3x3( const glm::dmat3& mat, double factor ) {
+    return mat * glm::dmat3(
+        factor, 0, 0,
+        0, factor, 0,
+        0, 0, 1 );
+}
+
 conway::geometry::Geometry GetSweptDiskSolid(
   conway::geometry::ConwayGeometryProcessor::ParamsGetSweptDiskSolid& parameters) {
     if (processor) {
@@ -125,6 +140,17 @@ conway::geometry::IfcCurve GetIfcCircle(
     const conway::geometry::ConwayGeometryProcessor::ParamsGetIfcCircle& parameters) {
   if (processor) {
     return processor->getIfcCircle(parameters);
+  }
+
+  conway::geometry::IfcCurve curve;
+
+  return curve;
+}
+
+conway::geometry::IfcCurve GetAP214Circle(
+    const conway::geometry::ConwayGeometryProcessor::ParamsGetIfcCircle& parameters) {
+  if (processor) {
+    return processor->getAP214Circle(parameters);
   }
 
   conway::geometry::IfcCurve curve;
@@ -820,6 +846,20 @@ void resizeVectorVectorDouble(std::vector<std::vector<double>>& vec, size_t newS
     vec.resize(newSize);
 }
 
+glm::dmat4 transpose4x4(const glm::dmat4& mat) {
+    return glm::transpose(mat);
+}
+
+
+glm::dmat4 invert4x4( const glm::dmat4& mat ) {
+    return glm::inverse( mat );
+}
+
+
+glm::dmat3 transpose3x3(const glm::dmat3& mat) {
+    return glm::transpose(mat);
+}
+
 EMSCRIPTEN_BINDINGS(my_module) {
   /*
     active: boolean
@@ -841,6 +881,20 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .field("active", &conway::geometry::Cylinder::Active)
       .field("radius", &conway::geometry::Cylinder::Radius);
 
+  emscripten::value_object<conway::geometry::Sphere>("SphericalSurface")
+      .field("active", &conway::geometry::Sphere::Active)
+      .field("radius", &conway::geometry::Sphere::Radius);
+    
+  emscripten::value_object<conway::geometry::Torus>("ToroidalSurface")
+      .field("active", &conway::geometry::Torus::Active)
+      .field("majorRadius", &conway::geometry::Torus::MajorRadius)
+      .field("minorRadius", &conway::geometry::Torus::MinorRadius);
+
+  emscripten::value_object<conway::geometry::Cone>("ConicalSurface")
+      .field("active", &conway::geometry::Cone::Active)
+      .field("radius", &conway::geometry::Cone::Radius)
+      .field("semiAngle", &conway::geometry::Cone::SemiAngle);
+
   emscripten::value_object<conway::geometry::BSpline>("BSplineSurface")
       .field("active", &conway::geometry::BSpline::Active)
       .field("uDegree", &conway::geometry::BSpline::UDegree)
@@ -859,8 +913,12 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .property("transformation", &conway::geometry::IfcSurface::transformation)
       .property("bspline", &conway::geometry::IfcSurface::BSplineSurface)
       .property("cylinder", &conway::geometry::IfcSurface::CylinderSurface)
+      .property("sphere", &conway::geometry::IfcSurface::SphericalSurface)
+      .property("cone", &conway::geometry::IfcSurface::ConicalSurface)
+      .property("torus", &conway::geometry::IfcSurface::ToroidalSurface)
       .property("revolution", &conway::geometry::IfcSurface::RevolutionSurface)
-      .property("extrusion", &conway::geometry::IfcSurface::ExtrusionSurface);
+      .property("extrusion", &conway::geometry::IfcSurface::ExtrusionSurface)
+      .property("sameSense", &conway::geometry::IfcSurface::sameSense);
 
   emscripten::class_<conway::geometry::IfcBound3D>("IfcBound3D")
       .constructor<>();
@@ -872,6 +930,7 @@ EMSCRIPTEN_BINDINGS(my_module) {
                 &conway::geometry::Geometry::GetVertexDataSize)
       .function("getPoint", &conway::geometry::Geometry::GetPoint)
       .function("getVertexCount", &conway::geometry::Geometry::GetVertexCount)
+      .function("getTriangleCount", &conway::geometry::Geometry::GetTriangleCount)
       .function("reify", &conway::geometry::Geometry::Reify)
       .function("clearReification", &conway::geometry::Geometry::ClearReification)
       .function("GetIndexData", &conway::geometry::Geometry::GetIndexData)
@@ -939,12 +998,17 @@ EMSCRIPTEN_BINDINGS(my_module) {
   emscripten::class_<glm::dmat4>("Glmdmat4")
       .constructor<>()
       .function("getValues", &getMatrixValues4x4)
-      .function("setValues", &setMatrixValues4x4);
+      .function("setValues", &setMatrixValues4x4)
+      .function("transpose", &transpose4x4 )
+      .function( "invert", &invert4x4 )
+      .function( "uniformScale", &uniformScale4x4 );
 
   emscripten::class_<glm::dmat3>("Glmdmat3")
       .constructor<>()
       .function("getValues", &getMatrixValues3x3)
-      .function("setValues", &setMatrixValues3x3);
+      .function("setValues", &setMatrixValues3x3)
+      .function("transpose", &transpose3x3 )
+      .function( "uniformScale", &uniformScale3x3 );
 
   emscripten::enum_<conway::geometry::BLEND_MODE>("BlendMode")
       .value("OPAQUE", conway::geometry::BLEND_MODE::BLEND_OPAQUE)
@@ -1288,14 +1352,36 @@ EMSCRIPTEN_BINDINGS(my_module) {
                            ParamsGetIfcCircle::radius)
       .field("radius2", &conway::geometry::ConwayGeometryProcessor::
                            ParamsGetIfcCircle::radius2)
+      .field("isEdge", &conway::geometry::ConwayGeometryProcessor::
+                           ParamsGetIfcCircle::isEdge)
       .field("paramsGetIfcTrimmedCurve",
              &conway::geometry::ConwayGeometryProcessor::ParamsGetIfcCircle::
                  paramsGetIfcTrimmedCurve);
 
+  emscripten::value_object<
+      conway::geometry::ConwayGeometryProcessor::ParamsGetBSplineCurve>(
+      "ParamsGetBSplineCurve")
+      .field("dimensions", &conway::geometry::ConwayGeometryProcessor::
+                               ParamsGetBSplineCurve::dimensions)
+      .field("degree", &conway::geometry::ConwayGeometryProcessor::
+                           ParamsGetBSplineCurve::degree)
+      .field("points2", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::points2)
+      .field("points3", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::points3)
+      .field("knots", &conway::geometry::ConwayGeometryProcessor::
+                          ParamsGetBSplineCurve::knots)
+      .field("weights", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::weights)
+      .field("paramsGetIfcTrimmedCurve", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::paramsGetIfcTrimmedCurve)
+      .field("isEdge", &conway::geometry::ConwayGeometryProcessor::
+                            ParamsGetBSplineCurve::isEdge);
+
   // conway::geometry::ConwayGeometryProcessor::ParamsGetIfcLine
   emscripten::value_object<
       conway::geometry::ConwayGeometryProcessor::ParamsGetIfcLine>(
-      "ParamsGetIfcCircle")
+      "ParamsGetIfcLine")
       .field("dimensions", &conway::geometry::ConwayGeometryProcessor::
                                ParamsGetIfcLine::dimensions)
       .field("cartesianPoint2D", &conway::geometry::ConwayGeometryProcessor::
@@ -1587,27 +1673,6 @@ EMSCRIPTEN_BINDINGS(my_module) {
     .field("circleSegments", &conway::geometry::ConwayGeometryProcessor::ParamsGetSweptDiskSolid::circleSegments)
     .field("scalingFactor", &conway::geometry::ConwayGeometryProcessor::ParamsGetSweptDiskSolid::scalingFactor);
 
-
-  emscripten::value_object<
-      conway::geometry::ConwayGeometryProcessor::ParamsGetBSplineCurve>(
-      "ParamsGetBSplineCurve")
-      .field("dimensions", &conway::geometry::ConwayGeometryProcessor::
-                               ParamsGetBSplineCurve::dimensions)
-      .field("degree", &conway::geometry::ConwayGeometryProcessor::
-                           ParamsGetBSplineCurve::degree)
-      .field("points2", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::points2)
-      .field("points3", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::points3)
-      .field("knots", &conway::geometry::ConwayGeometryProcessor::
-                          ParamsGetBSplineCurve::knots)
-      .field("weights", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::weights)
-      .field("senseAgreement", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::senseAgreement)
-      .field("isEdge", &conway::geometry::ConwayGeometryProcessor::
-                            ParamsGetBSplineCurve::isEdge);
-
   emscripten::value_object<conway::geometry::IfcTrimmingSelect>(
       "TrimmingSelect")
       .field("hasParam", &conway::geometry::IfcTrimmingSelect::hasParam)
@@ -1622,14 +1687,6 @@ EMSCRIPTEN_BINDINGS(my_module) {
       .field("exist", &conway::geometry::IfcTrimmingArguments::exist)
       .field("start", &conway::geometry::IfcTrimmingArguments::start)
       .field("end", &conway::geometry::IfcTrimmingArguments::end);
-
-  /**
-   * bool agreement = false;
-    double scaleFactor = 1.0;
-    conway::geometry::IfcCurve curve;
-    IfcSurface surface;
-    glm::dmat4 position;
-  */
 
   emscripten::value_object<conway::geometry::ConwayGeometryProcessor::ParamsGetPolygonalBoundedHalfspace>(
     "ParamsGetPolygonalBoundedHalfspace")
@@ -1745,6 +1802,7 @@ EMSCRIPTEN_BINDINGS(my_module) {
                        emscripten::allow_raw_pointers());
   emscripten::function("relVoidSubtract", &RelVoidSubtract);
   emscripten::function("getIfcCircle", &GetIfcCircle);
+  emscripten::function("getAP214Circle", &GetAP214Circle);
   emscripten::function("getIfcLine", &GetIfcLine);
   emscripten::function("getBSplineCurve", &GetBSplineCurve);
   emscripten::function("getLoop", &GetLoop);

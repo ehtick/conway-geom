@@ -7,6 +7,8 @@ namespace conway::geometry {
 
   constexpr uint32_t EMPTY_INDEX = 0xFFFFFFFF;
 
+  uint64_t edgeCompoundID( uint32_t vertex1, uint32_t vertex2 );
+
   struct Edge {
     
     uint32_t triangles[ 2 ] = { EMPTY_INDEX, EMPTY_INDEX };
@@ -30,6 +32,11 @@ namespace conway::geometry {
     }
 
     bool border() const { return triangles[ 0 ] == EMPTY_INDEX || triangles[ 1 ] == EMPTY_INDEX; }
+
+    uint64_t compoundID() const {
+
+      return edgeCompoundID( vertices[ 0 ], vertices[ 1 ] );
+    }
   };
 
   struct Triangle {

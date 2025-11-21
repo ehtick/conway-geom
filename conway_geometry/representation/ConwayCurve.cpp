@@ -30,7 +30,7 @@ std::string IfcCurve::DumpToOBJ( const std::string& preamble ) const {
     obj << "v " << t.x << " " << t.y << " " << t.z << "\n";
   }
 
-  if ( indices.size() > 1 ) {
+  /*if ( indices.size() > 1 ) {
 
       obj << "l";
 
@@ -41,7 +41,7 @@ std::string IfcCurve::DumpToOBJ( const std::string& preamble ) const {
 
       obj << "\n";
   
-  } else if ( points.size() > 1 ) {
+  } else */if ( points.size() > 1 ) {
 
       obj << "l";
 
@@ -75,19 +75,6 @@ std::string IfcCurve::DumpToSVG( const glm::dvec2& size, const glm::dvec2& offse
 
     svg.point( points[ 0 ] );
   
-  } else if ( !indices.empty() ) {
-
-    if ( indices.size() == 1 ) {
-      
-      svg.point( points[ indices[ 0 ] ] );
-    } else {
-
-      for ( size_t where = 0, end = indices.size() - 1; where < end; ++where ) {
-
-        svg.line( points[ indices[ where ] ], points[ indices[ where + 1 ] ] );
-      }
-    }
-  
   } else {
 
       for ( size_t where = 0, end = points.size() - 1; where < end; ++where ) {
@@ -118,18 +105,22 @@ glm::dvec2 IfcCurve::Get2d(size_t i) const {
 }
 
 size_t IfcCurve::GetPointsSize() const {
-  if (points.empty()) {
-    return 0;
-  } else {
-    return points.size();
-  }
+
+  return points.size();
 }
 
 glm::dvec3 IfcCurve::Get3d(size_t i) const { return points.at(i); }
 
 bool IfcCurve::Add3d( const glm::dvec3& pt) {
-  if ( points.empty() || pt != points.back() ) {
-    points.push_back(pt);
+
+  glm::dvec3 point = pt;
+
+  point *= exp2( 24 );
+  point = glm::round( point );
+  point *= exp2( -24 );
+
+   if ( points.empty() || point != points.back() ) {
+    points.push_back( point );
     return true;
   }
 

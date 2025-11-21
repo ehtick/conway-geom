@@ -14,16 +14,20 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+#include <ranges>
 
 #include "geometry_utils.h"
 #include "tesselation_utils.h"
+#include "manifold_utils.h"
+#include <queue>
 
 #define CONST_PI 3.141592653589793238462643383279502884L
 
 namespace conway::geometry {
 
-constexpr double MAX_DEFLECTION            = 0.001;
+constexpr double MAX_DEFLECTION            = 0.000001;
 constexpr double MAX_TRIANGLE_AMPLIFACTION = 32;
+
 
 // TODO: review and simplify
 inline void TriangulateRevolution(Geometry &geometry,
@@ -144,9 +148,9 @@ inline void TriangulateRevolution(Geometry &geometry,
   //  ... we will represent this bounding box.
 
   double startRad = startDegrees / 180 * (double)CONST_PI;
-  double endRad = endDegrees / 180 * (double)CONST_PI;
-  double radSpan = endRad - startRad;
-  double radStep = radSpan / (numRots - 1);
+  double endRad   = endDegrees / 180 * (double)CONST_PI;
+  double radSpan  = endRad - startRad;
+  double radStep  = radSpan / (numRots - 1);
 
   for (size_t i = 0; i < surface.RevolutionSurface.Profile.curve.points.size();
        i++) {
@@ -184,6 +188,436 @@ inline void TriangulateRevolution(Geometry &geometry,
   }
 }
 
+
+// TODO: review and simplify
+inline void TriangulateSphericalSurface(Geometry &geometry,
+                                        const std::vector<IfcBound3D> &bounds,
+                                        IfcSurface &surface) {
+  if ( bounds.empty() ) {
+    return;
+  }
+
+  double     radius = surface.SphericalSurface.Radius;
+  glm::dvec3 cent   = surface.transformation[3];
+  glm::dvec3 vecX   = glm::normalize(surface.transformation[0]);
+  glm::dvec3 vecY   = glm::normalize(surface.transformation[1]);
+  glm::dvec3 vecZ   = glm::normalize(surface.transformation[2]);
+
+  WingedEdgeMesh< glm::dvec3 > mesh;
+
+  tesselateDualParametrization(
+    mesh,
+    bounds,
+    [&]( const glm::dvec3& point ) {
+      // Produce a normalized vector from the centroid to the point.
+      glm::dvec3 deltaCentroid = glm::normalize( point - cent );
+
+      // we can normalize first because rotation is invariant
+      // relative the centroid
+      double dx = glm::dot( vecX, deltaCentroid );
+      double dy = glm::dot( vecY, deltaCentroid );
+      double dz = glm::dot (vecZ, deltaCentroid );
+
+      // Project the point onto the unit sphere surface
+      return glm::normalize( glm::dvec3( dx, dy, dz ) );
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 + normalFormVertex.z );
+
+      if ( 2.0 - z < DBL_EPSILON ) {
+        return glm::dvec2( 4, 4 );
+      }
+
+      return glm::normalize( glm::dvec2( normalFormVertex ) ) * z;
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 - normalFormVertex.z );
+
+      if ( 2.0 - z < DBL_EPSILON ) {
+        return glm::dvec2( 4, 4 );
+      }
+
+      return glm::normalize( glm::dvec2( normalFormVertex ) ) * z;
+    },
+    []( const glm::dvec3& normalFormVertex ) {
+
+      return ( normalFormVertex.z <= 0.0 ) ? 0 : 1;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+      if ( normalFormVertex1.z <= 0.0 && normalFormVertex2.z <= 0.0 ) {
+        return false;
+      }
+
+      if ( normalFormVertex1.z > ( 1.0 - DBL_EPSILON ) || normalFormVertex2.z > ( 1.0 - DBL_EPSILON ) ) {
+        return true;
+      }
+
+      return glm::distance( paramVertex1, paramVertex2 ) > 1.0;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+        if ( normalFormVertex1.z > 0.0 && normalFormVertex2.z > 0.0 ) {
+          return false;
+        }
+
+        if ( normalFormVertex1.z < ( -1.0 + DBL_EPSILON ) || normalFormVertex2.z < ( -1.0 + DBL_EPSILON ) ) {
+          return true;
+        }
+
+        return glm::distance( paramVertex1, paramVertex2 ) > 1.0;
+    } );
+
+  tesselate(
+    mesh,
+    [&]( const glm::dvec3& point ) { 
+      
+      return glm::normalize( point - cent ) * radius + cent;
+    },
+    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+    MAX_DEFLECTION );
+
+  appendMeshToGeometry( mesh, geometry );
+}
+
+
+// TODO: review and simplify
+inline void TriangulateToroidalSurface(
+    Geometry &geometry,
+    const std::vector<IfcBound3D> &bounds,
+    IfcSurface &surface) {
+
+  if ( bounds.empty() ) {
+    return;
+  }
+
+  double     majorRadius = surface.ToroidalSurface.MajorRadius;
+  double     minorRadius = surface.ToroidalSurface.MinorRadius;
+  glm::dvec3 cent        = surface.transformation[3];
+  glm::dvec3 vecX        = glm::normalize(surface.transformation[0]);
+  glm::dvec3 vecY        = glm::normalize(surface.transformation[1]);
+  glm::dvec3 vecZ        = glm::normalize(surface.transformation[2]);
+
+  WingedEdgeMesh< glm::dvec3 > mesh;
+
+  tesselateDualParametrization(
+    mesh,
+    bounds,
+    [&]( const glm::dvec3& point ) {
+
+      // Produce a normalized vector from the centroid to the point.
+      glm::dvec3 deltaCentroid = point - cent;
+
+      // we can normalize first because rotation is invariant
+      // relative the centroid
+      double dx = glm::dot( vecX, deltaCentroid );
+      double dy = glm::dot( vecY, deltaCentroid );
+      double dz = glm::dot (vecZ, deltaCentroid );
+
+      glm::dvec2 planar = glm::normalize( glm::dvec2( dx, dy ) );
+
+      glm::dvec3 normalRingCentre = 
+        glm::dvec3( 
+          glm::normalize( planar ),
+          0.0 );
+
+      // Centroid on the ring.
+      glm::dvec3 ringCenter =
+        normalRingCentre * majorRadius;
+
+      glm::dvec3 normalPointOnRing = glm::normalize( glm::dvec3( dx, dy, dz ) - ringCenter );
+
+      // Project the point onto the unit sphere surface
+      return ( normalRingCentre * 3.0 ) + normalPointOnRing;
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 + normalFormVertex.z );
+
+      glm::dvec2 originalPlanar   = glm::dvec2( normalFormVertex );
+      glm::dvec2 normalRingCentre = glm::normalize( originalPlanar );
+
+      // Range [-2, 2], ring is radiug 1.5 +/- 0.5 (inner hole is 1.0, outer ring is 2)
+      return normalRingCentre * ( 1.0 + z * 0.5 );
+    },
+    [&]( const glm::dvec3& normalFormVertex ) {
+
+      const double z = ( 1 - normalFormVertex.z );
+
+      glm::dvec2 originalPlanar   = glm::dvec2( normalFormVertex );
+      glm::dvec2 normalRingCentre = glm::normalize( originalPlanar );
+
+      // Range [-2, 2], ring is radiug 1.5 +/- 0.5 (inner hole is 1.0, outer ring is 2)
+      return normalRingCentre * ( 1.0 + z * 0.5 );
+    },
+    []( const glm::dvec3& normalFormVertex ) {
+
+      return ( normalFormVertex.z <= 0.0 ) ? 0 : 1;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+      if ( normalFormVertex1.z <= 0.0 && normalFormVertex2.z <= 0.0 ) {
+        return false;
+      }
+
+      return glm::distance( paramVertex1, paramVertex2 ) > 0.5;
+    },
+    []( const glm::dvec3& normalFormVertex1,
+        const glm::dvec3& normalFormVertex2,
+        const glm::dvec2& paramVertex1,
+        const glm::dvec2& paramVertex2 ) {
+
+        if ( normalFormVertex1.z >= 0.0 && normalFormVertex2.z >= 0.0 ) {
+          return false;
+        }
+
+        return glm::distance( paramVertex1, paramVertex2 ) > 0.5;
+    } );
+
+  tesselate(
+    mesh,
+    [&]( const glm::dvec3& point ) { 
+     
+      // Produce a normalized vector from the centroid to the point.
+      glm::dvec3 deltaCentroid = point - cent;
+
+      // we can normalize first because rotation is invariant
+      // relative the centroid
+      double dx = glm::dot( vecX, deltaCentroid );
+      double dy = glm::dot( vecY, deltaCentroid );
+      double dz = glm::dot (vecZ, deltaCentroid );
+
+      glm::dvec2 planar = glm::normalize( glm::dvec2( dx, dy ) );
+
+      // Centroid on the ring.
+      glm::dvec3 ringCenter =
+        glm::dvec3( glm::normalize( planar ) * majorRadius, 0.0 );
+
+      glm::dvec3 normalPointOnRing = glm::normalize( glm::dvec3( dx, dy, dz ) - ringCenter );
+
+      glm::dvec3 pointOnIdentityRing = ringCenter + ( normalPointOnRing * minorRadius );
+     
+      // Move back to the original coordinate frame.
+      return
+        vecX * pointOnIdentityRing.x +
+        vecY * pointOnIdentityRing.y +
+        vecZ * pointOnIdentityRing.z + cent;
+    },
+    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+    MAX_DEFLECTION );
+
+  appendMeshToGeometry( mesh, geometry );
+}
+
+
+// TODO: review and simplify
+inline void TriangulateConicalSurface(
+  Geometry &geometry,
+  const std::vector<IfcBound3D> &bounds,
+  IfcSurface &surface) {
+  // First we get the cylinder data
+
+  if ( bounds.empty() ) {
+    return;
+  }
+
+  double radius    = surface.ConicalSurface.Radius;
+  double semiAngle = surface.ConicalSurface.SemiAngle;
+
+  double sinSemiAngle = tan( fabs( semiAngle ) );
+  
+  glm::dvec3 cent = surface.transformation[3];
+  glm::dvec3 vecX = glm::normalize(surface.transformation[0]);
+  glm::dvec3 vecY = glm::normalize(surface.transformation[1]);
+  glm::dvec3 vecZ = glm::normalize(surface.transformation[2]);
+  
+  bool sameSense = surface.sameSense;
+
+  if ( glm::dot( vecZ, vecX ) > 0 ) {
+  
+    sameSense = !sameSense;
+  }
+
+  std::vector<std::vector<glm::dvec3>> newPoints;
+
+  double minR = DBL_MAX;
+  double maxR = -DBL_MAX;
+
+  std::priority_queue< std::pair< double, size_t > > outsideMostBoundaries;
+
+  // Find the relative coordinates of each curve point in the cylinder reference
+  // plane Only retain the max and min relative Z
+  for (size_t i = 0; i < bounds.size(); i++) {
+
+    double localMaxR = -DBL_MAX;
+    double localMinR = DBL_MAX;
+
+    for (size_t j = 0; j < bounds[i].curve.points.size(); j++) {
+
+      glm::dvec3 pt = bounds[ i ].curve.points[ j ];
+      glm::dvec3 vv = pt - cent;
+
+      double dx = glm::dot(vecX, vv);
+      double dy = glm::dot(vecY, vv);
+
+      double dr = glm::length( glm::dvec2( dx, dy ) );
+      
+      localMaxR = std::max( localMaxR, dr );
+      localMinR = std::min( localMinR, dr );
+    }
+
+    outsideMostBoundaries.push( std::make_pair( localMaxR, i ) );
+
+    maxR = std::max( maxR, localMaxR );
+    minR = std::min( minR, localMinR );
+  }
+
+  using Point = std::array<double, 2>;
+  std::vector<std::vector<Point>> uvBoundaryValues;
+  std::vector<ParameterVertex> vertices;
+
+  WingedEdgeMesh< ParameterVertex > mesh;
+
+  while ( !outsideMostBoundaries.empty() ) {
+
+    std::vector<Point> points;
+
+    size_t boundsIndex = outsideMostBoundaries.top().second;
+
+    outsideMostBoundaries.pop();
+   const IfcBound3D& bound = bounds[ boundsIndex ];
+
+    if ( bound.curve.points.empty() ) {
+      continue;
+    }
+
+    for ( const glm::dvec3& pt : bound.curve.points ) {
+
+      glm::dvec3 vv = pt - cent;
+
+      double dx = glm::dot(vecX, vv);
+      double dy = glm::dot(vecY, vv);
+      double dz = glm::dot(vecZ, vv);
+
+      glm::dvec2 pInv = glm::dvec2( dx, dy ) / maxR;
+
+      points.push_back({pInv.x, pInv.y});
+      mesh.makeVertex( { pt, pInv } );
+    }
+
+    uvBoundaryValues.push_back( points );
+  }
+
+#if (OUTPUT_SVG_DEBUG == 1) 
+
+    static size_t svgIndex = 0;
+
+    size_t outputIndex = svgIndex++;
+
+    std::ofstream svgFile( "cone_" + std::to_string( outputIndex ) + ".svg" );
+
+    auto svgScale = []( double value ) {
+
+      return 50 + ( 1024.0 * ( value + 1.0 ) / 2.0 ); 
+
+    };
+
+    svgFile << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+              << "width=\"1124\" height=\"1124\">\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"512\" style=\"stroke:rgb(255, 132, 0);stroke-width:2\" fill=\"none\"/>\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"256\" style=\"stroke:rgb(0, 0, 255);stroke-width:2\" fill=\"none\"/>\n";
+
+    for ( const std::vector< Point >& loop  : uvBoundaryValues )
+    {
+      bool firstInLoop = true;
+      
+      glm::dvec2 lastPoint;
+
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+
+        if ( firstInLoop )
+        {
+          svgFile << "<polyline points=\"";
+          firstInLoop = false;
+        }
+        else
+        {
+          svgFile << " ";
+        }
+
+        svgFile << svgScale( svgPoint.x ) << "," << svgScale( svgPoint.y );
+
+        lastPoint = svgPoint;
+      }
+
+      svgFile << "\" style=\"fill:none;stroke:rgb(0,0,0);stroke-width:2\" />\n";
+      
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+        
+        svgFile << "<circle cx=\"" << svgScale( svgPoint.x ) << "\" cy=\"" << svgScale( svgPoint.y )
+            << "\" r=\"3\" fill=\"red\"/>\n";
+      }
+    }
+
+    svgFile << "</svg>\n";
+
+    svgFile.close();
+
+#endif
+
+  // Triangulate projected boundary
+  // Subdivide resulting triangles to increase definition
+  // r indicates the level of subdivision, currently 3 you can increase it to
+  // 5
+
+  std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+
+  for (size_t i = 0; i < indices.size(); i += 3) {
+
+    mesh.makeTriangle( 
+      indices[ i  + 0 ], 
+      indices[ i  + 1 ], 
+      indices[ i  + 2 ] );
+  }
+
+  tesselate(
+    mesh,
+    [&]( const glm::dvec3& point, [[maybe_unused]]const glm::dvec2& from ) { 
+      
+      glm::dvec3 vv = point - cent;
+      double     dx = glm::dot( vecX, vv );
+      double     dy = glm::dot( vecY, vv );    
+      double     dz = glm::dot( vecZ, vv );
+
+      glm::dvec3 coneSpacePoint = glm::dvec3( ( radius + dz * sinSemiAngle ) * glm::normalize( glm::dvec2( dx, dy ) ), dz );
+
+      return cent + coneSpacePoint.x * vecX + coneSpacePoint.y * vecY + coneSpacePoint.z * vecZ;
+    },
+    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+    MAX_DEFLECTION );
+
+  appendMeshToGeometry( mesh, geometry, sameSense );
+}
+
 // TODO: review and simplify
 inline void TriangulateCylindricalSurface(Geometry &geometry,
                                           const std::vector<IfcBound3D> &bounds,
@@ -200,12 +634,24 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
   glm::dvec3 vecY = glm::normalize(surface.transformation[1]);
   glm::dvec3 vecZ = glm::normalize(surface.transformation[2]);
 
+  bool sameSense = surface.sameSense;
+
+  if ( glm::dot( vecZ, vecX ) > 0 ) {
+  
+    sameSense = !sameSense;
+  }
+  
   std::vector<std::vector<glm::dvec3>> newPoints;
 
   double minZ = DBL_MAX;
   double maxZ = -DBL_MAX;
 
   std::priority_queue< std::pair< double, size_t > > outsideMostBoundaries;
+
+  if ( bounds.size() == 1 && bounds[0].curve.points.size() < 3 ) {
+    // If there is no curve, we can not triangulate
+    return;
+  }
 
   // Find the relative coordinates of each curve point in the cylinder reference
   // plane Only retain the max and min relative Z
@@ -236,7 +682,7 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
   WingedEdgeMesh< ParameterVertex > mesh;
 
-  double zBias = ( maxZ - minZ ) / radius;
+  double zScale = 0.5 / ( maxZ - minZ );
 
   while ( !outsideMostBoundaries.empty() ) {
 
@@ -246,9 +692,14 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
     outsideMostBoundaries.pop();
 
-    for (size_t j = 0; j < bounds[boundsIndex].curve.points.size(); j++) {
+    const IfcBound3D& bound = bounds[ boundsIndex ];
 
-      glm::dvec3 pt = bounds[ boundsIndex ].curve.points[ j ];
+    if ( bound.curve.points.empty() ) {
+      continue;
+    }
+
+    for ( const glm::dvec3& pt : bound.curve.points ) {
+
       glm::dvec3 vv = pt - cent;
 
       double dx = glm::dot(vecX, vv);
@@ -256,19 +707,80 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
       double dz = glm::dot(vecZ, vv);
 
       glm::dvec2 pInv =
-        glm::dvec2( dx, dy ) * ( zBias + ( dz - minZ ) );
+        glm::normalize( glm::dvec2( dx, dy ) ) *
+        ( 0.5 + ( dz - minZ ) * zScale );
 
       points.push_back({pInv.x, pInv.y});
       mesh.makeVertex( { pt, pInv } );
-    }
+    } 
 
     uvBoundaryValues.push_back( points );
   }
 
-  // Triangulate projected boundary
-  // Subdivide resulting triangles to increase definition
-  // r indicates the level of subdivision, currently 3 you can increase it to
-  // 5
+#if (OUTPUT_SVG_DEBUG == 1) 
+
+    static size_t svgIndex = 0;
+
+    size_t outputIndex = svgIndex++;
+
+    std::ofstream svgFile( "cylinder_" + std::to_string( outputIndex ) + ".svg" );
+
+    auto svgScale = []( double value ) {
+
+      return 50 + ( 1024.0 * ( value + 1.0 ) / 2.0 ); 
+
+    };
+
+    svgFile << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+              << "width=\"1124\" height=\"1124\">\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"512\" style=\"stroke:rgb(255, 132, 0);stroke-width:2\" fill=\"none\"/>\n";
+
+    svgFile << "<circle cx=\"" << svgScale( 0 ) << "\" cy=\"" << svgScale( 0 )
+            << "\" r=\"256\" style=\"stroke:rgb(0, 0, 255);stroke-width:2\" fill=\"none\"/>\n";
+
+    for ( const std::vector< Point >& loop  : uvBoundaryValues )
+    {
+      bool firstInLoop = true;
+      
+      glm::dvec2 lastPoint;
+
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+
+        if ( firstInLoop )
+        {
+          svgFile << "<polyline points=\"";
+          firstInLoop = false;
+        }
+        else
+        {
+          svgFile << " ";
+        }
+
+        svgFile << svgScale( svgPoint.x ) << "," << svgScale( svgPoint.y );
+
+        lastPoint = svgPoint;
+      }
+
+      svgFile << "\" style=\"fill:none;stroke:rgb(0,0,0);stroke-width:2\" />\n";
+      
+      for ( const Point &point : loop )
+      {
+        glm::dvec2 svgPoint = glm::dvec2( point[ 0 ], point[ 1 ] );
+        
+        svgFile << "<circle cx=\"" << svgScale( svgPoint.x ) << "\" cy=\"" << svgScale( svgPoint.y )
+            << "\" r=\"3\" fill=\"red\"/>\n";
+      }
+    }
+
+    svgFile << "</svg>\n";
+
+    svgFile.close();
+
+#endif
 
   std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
 
@@ -284,21 +796,21 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
     mesh,
     [&]( const glm::dvec3& point, [[maybe_unused]]const glm::dvec2& from ) { 
       
-      glm::dvec3 vv       = point - cent;
-      double     dx       = glm::dot(vecX, vv);
-      double     dy       = glm::dot(vecY, vv);
-      double     dz       = glm::dot(vecZ, vv);
-      glm::dvec2 inPlane  = glm::dvec2( dx, dy );
-      double     distance = glm::length( inPlane );
+      glm::dvec3 vv                = point - cent;
+      double     dx                = glm::dot(vecX, vv);
+      double     dy                = glm::dot(vecY, vv);
+      double     dz                = glm::dot(vecZ, vv);
+      glm::dvec2 inPlane           = glm::dvec2( dx, dy );
+      glm::dvec2 normalizedInPlane = glm::normalize( from );
 
-      glm::dvec2 newInPlane = inPlane * ( radius / distance );
+      glm::dvec2 newInPlane = normalizedInPlane * radius;
 
       return cent + newInPlane.x * vecX + newInPlane.y * vecY + vecZ * dz;
     },
     mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
     MAX_DEFLECTION );
 
-  appendMeshToGeometry( mesh, geometry );
+  appendMeshToGeometry( mesh, geometry, sameSense );
 }
 
 // TODO: review and simplify
@@ -405,7 +917,177 @@ inline void TriangulateExtrusion(Geometry &geometry,
   }
 }
 
-inline double InverseMethod(glm::dvec3 pt, const tinynurbs::RationalSurface3d& srf,
+constexpr size_t INVERSE_GRID_SIDE   = 8.0; 
+constexpr double INVERSE_GRID_SIZE_D = static_cast< double >( INVERSE_GRID_SIDE );
+constexpr double INVERSE_GRID_FACTOR = 1.0 / ( INVERSE_GRID_SIZE_D - 1.0 );
+constexpr double MAX_ERROR           = 0.001;
+constexpr double ALPHA_ERROR         = 1e-6;
+constexpr double MIN_STEP            = 1e-9;
+
+constexpr size_t MAX_ITERATION       = 50;
+
+struct RationalNurbsInverseMethod {
+
+  glm::dvec3 grid[ INVERSE_GRID_SIDE ][ INVERSE_GRID_SIDE ];
+  const tinynurbs::RationalSurface3d& surface;
+
+  glm::dvec2 min_extent;
+  glm::dvec2 max_extent;
+
+  RationalNurbsInverseMethod( const tinynurbs::RationalSurface3d& srf ) : surface( srf ) {
+
+    size_t degreeU = static_cast< size_t >( srf.degree_u );
+    size_t degreeV = static_cast< size_t >( srf.degree_v );
+   
+    if ( srf.knots_u.size() == 2 ) {
+   
+      degreeU = 0;
+
+    }
+
+    if ( srf.knots_v.size() == 2 ) {
+
+      degreeV = 0;
+
+    }
+
+    min_extent = glm::dvec2( 
+      srf.knots_u.size() < degreeU ? srf.knots_u[ degreeU ] : 0.0,
+      srf.knots_v.size() < degreeV ? srf.knots_v[ degreeV ] : 0.0 );
+
+    size_t uM = srf.knots_u.size() - ( degreeU + 1 );
+    size_t vM = srf.knots_v.size() - ( degreeV + 1 );
+
+    max_extent = glm::dvec2( 
+      srf.knots_u.size() < uM ? srf.knots_u[ srf.knots_u.size() - ( degreeU + 1 ) ] : 1.0,
+      srf.knots_v.size() < vM ? srf.knots_v[ srf.knots_v.size() - ( degreeV + 1 ) ] : 1.0 );
+
+
+    for ( size_t i = 0; i < INVERSE_GRID_SIDE; ++i ) {
+      for ( size_t j = 0; j < INVERSE_GRID_SIDE; ++j ) {
+
+        glm::dvec2 uv = 
+          min_extent + 
+          ( max_extent - min_extent ) * 
+          glm::dvec2( 
+            static_cast< double >( i ) * INVERSE_GRID_FACTOR,
+            static_cast< double >( j ) * INVERSE_GRID_FACTOR );
+
+        grid[ i ][ j ] =
+          tinynurbs::surfacePoint(
+            srf,
+            uv.x,
+            uv.y );
+      }
+    }
+  }
+
+  glm::dvec2 operator()( const glm::dvec3& point ) const {
+
+    glm::dvec2 bestGuess;
+    glm::dvec3 bestPoint;
+    double     minDistance2 = DBL_MAX;
+    
+    // Take initial guess from the grid.
+    for ( size_t i = 0; i < INVERSE_GRID_SIDE; ++i ) {
+      for ( size_t j = 0; j < INVERSE_GRID_SIDE; ++j ) {
+
+        glm::dvec3 deltaP = grid[ i ][ j ] - point;
+
+        double distance2 = glm::dot( deltaP, deltaP );
+
+        if ( distance2 < minDistance2 ) {
+
+          bestGuess =
+            min_extent + 
+            ( max_extent - min_extent ) * 
+            glm::dvec2( 
+              static_cast< double >( i ) * INVERSE_GRID_FACTOR,
+              static_cast< double >( j ) * INVERSE_GRID_FACTOR );
+
+          bestPoint    = grid[ i ][ j ];
+          minDistance2 = distance2;
+        }
+      }
+    }
+
+    size_t iteration = 0;
+
+    double damping = 1e-6;
+
+    // glm::dvec2 alphaUV    = max_extent - min_extent;
+    // double     startAlpha = 1.0 / std::max( alphaUV.x, alphaUV.y );
+
+    while ( minDistance2 > MAX_ERROR * MAX_ERROR && iteration++ < MAX_ITERATION ) {
+
+      glm::dvec3 deltaP = bestPoint - point;
+
+      if ( minDistance2 <= MAX_ERROR * MAX_ERROR ) {
+        break;
+      }
+
+      auto [dU, dV] = tinynurbs::surfaceTangent( surface, bestGuess.x, bestGuess.y );
+
+      glm::dmat2x3 jacobianT( dU, dV ); // Jacobian
+      glm::dmat3x2 jacobian = glm::transpose( jacobianT );   // Transposed Jacobian
+
+      glm::dmat2x2 jtj = jacobian * jacobianT; // J^T * J
+      glm::dvec2   jte = jacobian * deltaP;    // J^T * e
+
+      jtj[ 0 ][ 0 ] += damping;
+      jtj[ 1 ][ 1 ] += damping;
+
+      glm::dvec2 deltaUV = robust_2x2_solve( jtj, jte );
+
+      double alpha = 1.0;//startAlpha;
+      double phi   = 0.5 * minDistance2;
+
+      bool success = false;
+
+      while ( alpha > ALPHA_ERROR ) {
+
+        glm::dvec2 newGuessUV = bestGuess - deltaUV * alpha;
+
+        newGuessUV = glm::clamp( newGuessUV, min_extent, max_extent );
+
+        glm::dvec3 newPoint =
+          tinynurbs::surfacePoint( surface, newGuessUV.x, newGuessUV.y );
+
+        glm::dvec3 newDeltaP = newPoint - point;
+
+        double newDistance2 = glm::dot( newDeltaP, newDeltaP );
+
+        if ( newDistance2 < minDistance2 - MAX_ERROR * alpha * glm::dot( deltaUV, jte ) ) {
+
+          bestPoint = newPoint;
+          bestGuess = newGuessUV;
+          damping  *= 0.1;
+          
+          minDistance2 = std::min( newDistance2, newDistance2 );
+          success = true;
+          break;
+        }
+
+        alpha *= 0.5;
+      }
+
+      if ( !success ) {
+        damping *= 10.0;
+        continue;
+      }
+
+      if ( glm::dot( deltaUV, deltaUV ) < MIN_STEP * MIN_STEP ) {
+        break;
+      }
+    }
+
+    return bestGuess;
+  }
+
+};
+
+
+/*inline double InverseMethod(glm::dvec3 pt, const tinynurbs::RationalSurface3d& srf,
                             double pr, double rotations, double minError,
                             double maxError, double &fU, double &fV,
                             double &divisor, double maxDistance) {
@@ -449,62 +1131,67 @@ inline double InverseMethod(glm::dvec3 pt, const tinynurbs::RationalSurface3d& s
     // printf("minError: %.3f\n", minError);
   }
   return maxDistance;
-}
+}*/
 
-inline glm::dvec2 BSplineInverseEvaluation(glm::dvec3 pt,
-                                           const tinynurbs::RationalSurface3d& srf,
-                                           double scaling) {
-  glm::highp_dvec3 ptc = tinynurbs::surfacePoint(srf, 0.0, 0.0);
-  glm::highp_dvec3 pth = tinynurbs::surfacePoint(srf, 1.0, 0.0);
-  glm::highp_dvec3 ptv = tinynurbs::surfacePoint(srf, 0.0, 1.0);
+// inline glm::dvec2 BSplineInverseEvaluation(glm::dvec3 pt,
+//                                            const tinynurbs::RationalSurface3d& srf,
+//                                            double scaling) {
+//   glm::highp_dvec3 ptc = tinynurbs::surfacePoint(srf, 0.0, 0.0);
+//   glm::highp_dvec3 pth = tinynurbs::surfacePoint(srf, 1.0, 0.0);
+//   glm::highp_dvec3 ptv = tinynurbs::surfacePoint(srf, 0.0, 1.0);
 
-  double dh = glm::distance(ptc, pth);
-  double dv = glm::distance(ptc, ptv);
-  double pr = (dh + 1) / (dv + 1);
+//   double dh = glm::distance(ptc, pth);
+//   double dv = glm::distance(ptc, ptv);
+//   double pr = (dh + 1) / (dv + 1);
 
-  double minError = 0.00001;
-  double maxError = 0.001;
-  double rotations = 6;
+//   double minError = 0.00001;
+//   double maxError = 0.001;
+//   double rotations = 6;
 
-  double fU = 0.5;
-  double fV = 0.5;
-  double divisor = 100.0;
-  double maxDistance = 1e+100;
+//   double fU = 0.5;
+//   double fV = 0.5;
+//   double divisor = 100.0;
+//   double maxDistance = 1e+100;
 
-  //printf("scaling: %.3f\n", scaling);
-  maxDistance =
-    InverseMethod(
-        pt,
-        srf,
-        pr,
-        rotations,
-        minError / scaling,
-        maxError / scaling,
-        fU,
-        fV,
-        divisor,
-        maxDistance );
+//   //printf("scaling: %.3f\n", scaling);
+//   maxDistance =
+//     InverseMethod(
+//         pt,
+//         srf,
+//         pr,
+//         rotations,
+//         minError / scaling,
+//         maxError / scaling,
+//         fU,
+//         fV,
+//         divisor,
+//         maxDistance );
 
-  return glm::dvec2(fU, fV);
-}
+//   return glm::dvec2(fU, fV);
+// }
 
 // TODO: review and simplify
 inline void TriangulateBspline(Geometry &geometry,
                                const std::vector<IfcBound3D> &bounds,
                                IfcSurface &surface, double scaling) {
 
+//  printf( "Triangulating BSpline Surface\n" );
+
   tinynurbs::RationalSurface3d srf;
+  
   srf.degree_u = surface.BSplineSurface.UDegree;
   srf.degree_v = surface.BSplineSurface.VDegree;
   size_t num_u = surface.BSplineSurface.ControlPoints.size();
   size_t num_v = surface.BSplineSurface.ControlPoints[0].size();
 
   std::vector<glm::dvec3> controlPoints;
-  for (std::vector<glm::dvec3> row : surface.BSplineSurface.ControlPoints) {
+
+  for ( std::vector<glm::dvec3> row : surface.BSplineSurface.ControlPoints ) {
     for (glm::dvec3 point : row) {
       controlPoints.push_back({point.x, point.y, point.z});
     }
   }
+
   srf.control_points = tinynurbs::array2(num_u, num_v, controlPoints);
 
   std::vector<double> weights;
@@ -536,6 +1223,11 @@ inline void TriangulateBspline(Geometry &geometry,
   }
 
   // If the NURBS surface is valid we continue
+  
+
+//  printf( "Evaluating inverse parameter space\n" );
+
+  RationalNurbsInverseMethod bSplineInverseEvaluation( srf );
 
   if (tinynurbs::surfaceIsValid(srf)) {
     // Find projected boundary using NURBS inverse evaluation
@@ -559,20 +1251,16 @@ inline void TriangulateBspline(Geometry &geometry,
         pt.y *= scaling;
         pt.z *= scaling;
 
-        glm::dvec2 pInv = BSplineInverseEvaluation(pt, srf, 1.0f);
+        glm::dvec2 pInv = bSplineInverseEvaluation( pt );
 
-        // printf("[bounds[0]]: point %i, x: %.3f, y: %.3f, z: %.3f u: %.3f v: %.3f\n", j, pt.x,
-        //         pt.y, pt.z, pInv.x, pInv.y);
-
-        // pInv.x /= scaling;
-        // pInv.y /= scaling;
-        
         points.push_back({pInv.x, pInv.y});
         mesh.makeVertex( { pt, pInv } );
       }
 
       uvBoundaryValues.push_back(points);
     }
+
+  //  printf( "Earcutting parameter space %zu\n", mesh.vertices.size() );
 
     // Triangulate projected boundary
     // Subdivide resulting triangles to increase definition
@@ -581,13 +1269,15 @@ inline void TriangulateBspline(Geometry &geometry,
 
     std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
 
-    for (size_t i = 0; i < indices.size(); i += 3) {
+    for ( size_t i = 0; i < indices.size(); i += 3 ) {
 
       mesh.makeTriangle( 
         indices[ i  + 0 ], 
         indices[ i  + 1 ], 
         indices[ i  + 2 ] );
     }
+    
+  //  printf( "Tesselating BSpline Surface\n" );
 
     tesselate(
       mesh,
@@ -597,10 +1287,13 @@ inline void TriangulateBspline(Geometry &geometry,
       mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
       MAX_DEFLECTION );
 
-    appendMeshToGeometry( mesh, geometry );
+    appendMeshToGeometry( mesh, geometry, !surface.sameSense );
+
+  //  printf( "Tesselated BSpline Surface with %zu triangles\n", mesh.triangles.size() );
+
 
   } else {
-    printf("surface was not valid!\n");
+    Logger::logError( "Surface was not valid!\n");
   }
 }
 }  // namespace conway::geometry

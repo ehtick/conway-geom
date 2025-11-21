@@ -1379,7 +1379,7 @@ void conway::geometry::CSGMesher::triangulate(
 
     const glm::dvec3& inputVertex = vertices[ partitionedIndice ];
 
-    local2DVertices_.push_back( CDT::V2d< double >::make( inputVertex[ firstAxis ], inputVertex[ secondAxis ] ) );
+    local2DVertices_.push_back( CDT::V2d< double >( inputVertex[ firstAxis ], inputVertex[ secondAxis ] ) );
   }
   
   for ( uint32_t edgeInTriangle = 0; edgeInTriangle < 3; ++edgeInTriangle ) {

@@ -16,7 +16,6 @@
 
 namespace conway::geometry {
 
-
   // Specialise this to extract different vertex types of OBJ dump
   template < typename VertexType >
   struct VertexExtractor {
@@ -37,6 +36,15 @@ namespace conway::geometry {
       }
   };
 
+  template <>
+  struct VertexExtractor< glm::dvec2 > {
+
+      glm::dvec3 operator()( const glm::dvec2& value ) const {
+
+          return glm::dvec3( value, 0 );
+      }
+  };
+
   template < typename VertexType >
   struct WingedEdgeMesh {
 
@@ -48,21 +56,9 @@ namespace conway::geometry {
 
     std::unordered_map< uint64_t, uint32_t > edge_map;
 
-    std::optional< AABBTree > bvh;
-
     void makeTriangle( uint32_t a, uint32_t b, uint32_t c, uint32_t index );
 
     void clear();
-
-    /** Construct a BVH for this. */
-    AABBTree& makeBVH() {
-
-      if ( !bvh.has_value() ) {
-        bvh.emplace( *this );
-      }
-
-      return *bvh;
-    }
 
     std::optional< uint32_t > getEdge( uint32_t v0, uint32_t v1 ) const;
 
@@ -101,7 +97,6 @@ namespace conway::geometry {
 
   template < typename VertexType >
   inline void WingedEdgeMesh< VertexType >::clear() {
-    bvh.reset();
     edge_map.clear();
     vertices.clear();
     edges.clear();
@@ -266,8 +261,7 @@ namespace conway::geometry {
     
       snprintf( fBuffer, sizeof( fBuffer ), fFormat, f1, f2, f3 );
       
-      obj.append( fBuffer );
-    
+      obj.append( fBuffer );    
     }
 
     return obj;
@@ -278,11 +272,6 @@ namespace conway::geometry {
 
     uint32_t vertexOffset = static_cast< uint32_t >( vertices.size() );
     
-    bool hasBVH     = bvh.has_value();
-    bool hasDipoles = hasBVH && bvh->hasDipoles();
-
-    bvh.reset();
-
     vertices.insert( vertices.end(), other.vertices.begin(), other.vertices.end() );
 
     for ( const ConnectedTriangle& triangle : other.triangles ) {
@@ -291,16 +280,6 @@ namespace conway::geometry {
         triangle.vertices[ 0 ] + vertexOffset,
         triangle.vertices[ 1 ] + vertexOffset,
         triangle.vertices[ 2 ] + vertexOffset );
-    }
-
-    if ( hasBVH ) {
-
-      AABBTree& localBVH = makeBVH();
-
-      if ( hasDipoles ) {
-
-        localBVH.dipoles( *this );
-      }
     }
   }
 }

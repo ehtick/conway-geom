@@ -1,6 +1,7 @@
 import { StdVector } from '../std_vector'
 import { Vector2 } from '../vector2'
 import { Vector3 } from '../vector3'
+import { ParamsGetIfcTrimmedCurve } from './params_get_ifc_trimmed_curve'
 
 
 /** Parameters for getting a bspline curve */
@@ -11,6 +12,6 @@ export interface ParamsGetBSplineCurve {
   points3: StdVector<Vector3>
   knots: StdVector<number>
   weights: StdVector<number>
-  senseAgreement:boolean
+  paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve
   isEdge:boolean
 }

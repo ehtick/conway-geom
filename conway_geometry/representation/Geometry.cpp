@@ -179,7 +179,8 @@ void Geometry::Reify( const glm::dvec3& offset ) {
   // Greedy vertex smoothing.
   for ( uint32_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex ) {
 
-    std::span< const uint32_t > trianglesPerVertex = vertexTriangles.get( vertexIndex );
+    std::span< const uint32_t > trianglesPerVertex =
+      vertexTriangles.get( vertexIndex );
 
     for ( size_t triangleInSpan = 0, end = trianglesPerVertex.size(); triangleInSpan < end; ++triangleInSpan ) {
 
