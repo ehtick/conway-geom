@@ -71,11 +71,29 @@ function pThreadsAllowed(): boolean {
   // (SharedArrayBuffer may exist but will only work with threads if 
   // crossOriginIsolated is true.)
   if ( isWebPlatform() ) {
+    if (isIosBrowser()) {
+      return false
+    }
 
     return window.crossOriginIsolated === true
   }
 
   return true
+}
+
+function isIosBrowser(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false
+  }
+
+  const ua = navigator.userAgent || navigator.vendor || ''
+  if (/\b(iPad|iPhone|iPod)\b/i.test(ua)) {
+    return true
+  }
+
+  return navigator.platform === 'MacIntel' &&
+    typeof navigator.maxTouchPoints === 'number' &&
+    navigator.maxTouchPoints > 1
 }
 
 export let wasmType:string = ""
