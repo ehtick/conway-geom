@@ -632,9 +632,10 @@ namespace conway::geometry
       cdtEdges.emplace_back( remappedV1, remappedV2 );
     }
 
-    static uint32_t svgIndex = 0;
-
-    uint32_t outputIndex = svgIndex++;
+    // atomic: this can run concurrently on the thread pool during staged
+    // face finalization (same fix as tesselatePlane above).
+    static std::atomic< uint32_t > svgIndex    = 0;
+    uint32_t                       outputIndex = svgIndex++;
 
 #if (OUTPUT_SVG_DEBUG == 1)
 

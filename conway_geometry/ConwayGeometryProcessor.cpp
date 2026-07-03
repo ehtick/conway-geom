@@ -594,13 +594,8 @@ void ConwayGeometryProcessor::StageFaceToGeometrySimple(
   promoted.advancedBrep = false;
   promoted.scaling      = parameters.scaling;
 
-  stagedFaceJobs_.push_back(
-      StagedFaceJob{ std::move( promoted ), &geometry } );
-
-  if ( stagedFaceJobs_.size() >= STAGED_FACE_FLUSH_THRESHOLD ) {
-
-    FinalizeStagedFaces();
-  }
+  // Delegate so the queue append and flush policy live in one place.
+  StageFaceToGeometry( promoted, geometry );
 }
 
 void ConwayGeometryProcessor::FinalizeStagedFaces() {

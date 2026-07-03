@@ -206,7 +206,8 @@ inline glm::dvec3 InterpolateRationalBSplineCurveWithKnots(
   // converting (and copying) the entire control polygon per sample.
   if ( degree <= static_cast< int >( NURBS_MAX_STACK_DEGREE ) &&
        s - degree >= 0 &&
-       s < static_cast< int >( points.size() ) ) {
+       s < static_cast< int >( points.size() ) &&
+       s < static_cast< int >( weights.size() ) ) {
 
     glm::dvec4 window[ NURBS_MAX_STACK_DEGREE + 1 ];
 
@@ -315,7 +316,8 @@ inline glm::dvec2 InterpolateRationalBSplineCurveWithKnots(
   // converting (and copying) the entire control polygon per sample.
   if ( degree <= static_cast< int >( NURBS_MAX_STACK_DEGREE ) &&
        s - degree >= 0 &&
-       s < static_cast< int >( points.size() ) ) {
+       s < static_cast< int >( points.size() ) &&
+       s < static_cast< int >( weights.size() ) ) {
 
     glm::dvec3 window[ NURBS_MAX_STACK_DEGREE + 1 ];
 

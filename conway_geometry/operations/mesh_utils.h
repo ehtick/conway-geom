@@ -522,7 +522,9 @@ inline void TriangulateConicalSurface(
 
 #if (OUTPUT_SVG_DEBUG == 1) 
 
-    static size_t svgIndex = 0;
+    // atomic: may run concurrently on the thread pool during staged face
+    // finalization.
+    static std::atomic< size_t > svgIndex = 0;
 
     size_t outputIndex = svgIndex++;
 
@@ -720,7 +722,9 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
 #if (OUTPUT_SVG_DEBUG == 1) 
 
-    static size_t svgIndex = 0;
+    // atomic: may run concurrently on the thread pool during staged face
+    // finalization.
+    static std::atomic< size_t > svgIndex = 0;
 
     size_t outputIndex = svgIndex++;
 
@@ -1231,9 +1235,13 @@ inline void TriangulateBspline(Geometry &geometry,
 
 //  printf( "Evaluating inverse parameter space\n" );
 
-  RationalNurbsInverseMethod bSplineInverseEvaluation( srf );
-
   if (tinynurbs::surfaceIsValid(srf)) {
+
+    // Constructed only for valid surfaces: this builds the homogeneous
+    // control grid and samples the inverse-evaluation seed grid, all of
+    // which would be wasted on the invalid-surface path below.
+    RationalNurbsInverseMethod bSplineInverseEvaluation( srf );
+
     // Find projected boundary using NURBS inverse evaluation
 
     using Point = std::array<double, 2>;

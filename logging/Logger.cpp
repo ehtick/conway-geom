@@ -21,7 +21,9 @@ void Logger::logInfo(const char* format, ...) {
 
     EM_ASM(
         {
-            let globalScope = (typeof window !== 'undefined') ? window : global;
+            let globalScope =
+                (typeof globalThis !== 'undefined') ? globalThis :
+                    ((typeof window !== 'undefined') ? window : global);
             if (typeof globalScope['logInfo'] === 'function') {
                 globalScope['logInfo'](UTF8ToString($0));
             }
@@ -47,7 +49,9 @@ void Logger::logWarning(const char* format, ...) {
 
     EM_ASM(
         {
-            let globalScope = (typeof window !== 'undefined') ? window : global;
+            let globalScope =
+                (typeof globalThis !== 'undefined') ? globalThis :
+                    ((typeof window !== 'undefined') ? window : global);
             if (typeof globalScope['logWarning'] === 'function') {
                 globalScope['logWarning'](UTF8ToString($0));
             }
@@ -73,7 +77,9 @@ void Logger::logError(const char* format, ...) {
 
     EM_ASM(
         {
-            let globalScope = (typeof window !== 'undefined') ? window : global;
+            let globalScope =
+                (typeof globalThis !== 'undefined') ? globalThis :
+                    ((typeof window !== 'undefined') ? window : global);
             if (typeof globalScope['logError'] === 'function') {
                 globalScope['logError'](UTF8ToString($0));
             }

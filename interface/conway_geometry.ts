@@ -501,9 +501,14 @@ export class ConwayGeometry {
   /**
    * Tessellate all staged faces (in parallel where threads are available)
    * and append the results to their target geometries in staging order.
+   *
+   * A no-op on wasm modules that predate the staged face API, so callers
+   * can invoke it defensively without checking supportsStagedFaces().
    */
   finalizeStagedFaces(): void {
-    this.wasmModule.finalizeStagedFaces()
+    if ( this.supportsStagedFaces() ) {
+      this.wasmModule.finalizeStagedFaces()
+    }
   }
 
   /**
