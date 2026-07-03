@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 
 #include "structures/winged_edge.h"
+#include <atomic>
 #include <queue>
 #include "representation/Geometry.h"
 #include "representation/IfcGeometryReps.h"
@@ -202,8 +203,10 @@ namespace conway::geometry
       cdtEdges.emplace_back( remappedV1, remappedV2 );
     }
 
-    static uint32_t svgIndex    = 0;
-    uint32_t        outputIndex = svgIndex++;
+    // atomic: tesselatePlane may run concurrently on the thread pool during
+    // staged face finalization.
+    static std::atomic< uint32_t > svgIndex    = 0;
+    uint32_t                       outputIndex = svgIndex++;
 
 // Output SVG for debugging.
 #if (OUTPUT_SVG_DEBUG == 1)

@@ -232,6 +232,29 @@ class ConwayGeometryProcessor {
   void AddFaceToGeometry(ParamsAddFaceToGeometry& parameters,
                          Geometry& geometry);
 
+  /**
+   * Deferred variant of AddFaceToGeometry: stages the face so a later
+   * FinalizeStagedFaces call can tessellate many faces in parallel on the
+   * thread pool. Results are appended to each face's target geometry in
+   * staging order, so the output is identical to calling AddFaceToGeometry
+   * immediately. Staged jobs auto-flush in large batches to bound memory.
+   *
+   * IMPORTANT: callers must invoke FinalizeStagedFaces before reading
+   * triangles from (or deleting) any target geometry.
+   */
+  void StageFaceToGeometry(ParamsAddFaceToGeometry& parameters,
+                           Geometry& geometry);
+
+  /** Deferred variant of AddFaceToGeometrySimple, see StageFaceToGeometry. */
+  void StageFaceToGeometrySimple(ParamsAddFaceToGeometrySimple& parameters,
+                                 Geometry& geometry);
+
+  /**
+   * Tessellate all staged faces (in parallel where threads are available)
+   * and append the results to their target geometries in staging order.
+   */
+  void FinalizeStagedFaces();
+
   // case ifc::IFCRECTANGLEPROFILEDEF:
   // case ifc::IFCROUNDEDRECTANGLEPROFILEDEF:
   struct ParamsGetRectangleProfileCurve {
@@ -707,5 +730,12 @@ class ConwayGeometryProcessor {
  private:
   bool MESH_CACHE = false;
   int BOOL_ABORT_THRESHOLD = 10000;  // 10k verts
+
+  struct StagedFaceJob {
+    ParamsAddFaceToGeometry parameters;
+    Geometry* target = nullptr;
+  };
+
+  std::vector<StagedFaceJob> stagedFaceJobs_;
 };
 }  // namespace conway::geometry
