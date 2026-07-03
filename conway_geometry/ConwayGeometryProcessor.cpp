@@ -20,6 +20,7 @@
 
 #include "csg/csg.h"
 
+#include "structures/thread_pool.h"
 #include "structures/vertex_welder.h"
 
 namespace conway::geometry {
@@ -561,6 +562,88 @@ void ConwayGeometryProcessor::AddFaceToGeometry(
   }
 }
 
+
+namespace {
+
+  /**
+   * Auto-flush threshold for staged face jobs. Large enough to keep the
+   * thread pool saturated per flush, small enough to bound the transient
+   * memory held by staged bounds/surfaces on big models.
+   */
+  constexpr size_t STAGED_FACE_FLUSH_THRESHOLD = 4096;
+}
+
+void ConwayGeometryProcessor::StageFaceToGeometry(
+    ParamsAddFaceToGeometry& parameters, Geometry& geometry) {
+
+  stagedFaceJobs_.push_back(
+      StagedFaceJob{ std::move( parameters ), &geometry } );
+
+  if ( stagedFaceJobs_.size() >= STAGED_FACE_FLUSH_THRESHOLD ) {
+
+    FinalizeStagedFaces();
+  }
+}
+
+void ConwayGeometryProcessor::StageFaceToGeometrySimple(
+    ParamsAddFaceToGeometrySimple& parameters, Geometry& geometry) {
+
+  ParamsAddFaceToGeometry promoted;
+
+  promoted.boundsArray  = std::move( parameters.boundsArray );
+  promoted.advancedBrep = false;
+  promoted.scaling      = parameters.scaling;
+
+  // Delegate so the queue append and flush policy live in one place.
+  StageFaceToGeometry( promoted, geometry );
+}
+
+void ConwayGeometryProcessor::FinalizeStagedFaces() {
+
+  size_t jobCount = stagedFaceJobs_.size();
+
+  if ( jobCount == 0 ) {
+    return;
+  }
+
+  // Tessellate every staged face into its own local geometry in parallel,
+  // then append the results in staging order so output ordering (and
+  // therefore output data) matches the immediate AddFaceToGeometry path.
+  std::vector< Geometry > results( jobCount );
+
+  ThreadPool::instance().parallel_for( 0, jobCount, [&]( size_t where ) {
+
+    StagedFaceJob& job = stagedFaceJobs_[ where ];
+
+    try {
+
+      AddFaceToGeometry( job.parameters, results[ where ] );
+
+    } catch ( const std::exception& e ) {
+
+      results[ where ].Clear();
+      Logger::logError( "Exception tessellating staged face: %s", e.what() );
+
+    } catch ( ... ) {
+
+      results[ where ].Clear();
+      Logger::logError( "Unknown exception tessellating staged face." );
+    }
+  } );
+
+  for ( size_t where = 0; where < jobCount; ++where ) {
+
+    const Geometry& result = results[ where ];
+
+    if ( result.vertices.empty() && result.triangles.empty() ) {
+      continue;
+    }
+
+    stagedFaceJobs_[ where ].target->AppendGeometry( result );
+  }
+
+  stagedFaceJobs_.clear();
+}
 
 IfcSurface ConwayGeometryProcessor::GetSurface(const ParamsGetSurface& parameters) {
   if (parameters.isPlane) {

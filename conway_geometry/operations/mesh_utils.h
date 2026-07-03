@@ -17,6 +17,7 @@
 #include <ranges>
 
 #include "geometry_utils.h"
+#include "nurbs_utils.h"
 #include "tesselation_utils.h"
 #include "manifold_utils.h"
 #include <queue>
@@ -521,7 +522,9 @@ inline void TriangulateConicalSurface(
 
 #if (OUTPUT_SVG_DEBUG == 1) 
 
-    static size_t svgIndex = 0;
+    // atomic: may run concurrently on the thread pool during staged face
+    // finalization.
+    static std::atomic< size_t > svgIndex = 0;
 
     size_t outputIndex = svgIndex++;
 
@@ -719,7 +722,9 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
 #if (OUTPUT_SVG_DEBUG == 1) 
 
-    static size_t svgIndex = 0;
+    // atomic: may run concurrently on the thread pool during staged face
+    // finalization.
+    static std::atomic< size_t > svgIndex = 0;
 
     size_t outputIndex = svgIndex++;
 
@@ -931,10 +936,14 @@ struct RationalNurbsInverseMethod {
   glm::dvec3 grid[ INVERSE_GRID_SIDE ][ INVERSE_GRID_SIDE ];
   const tinynurbs::RationalSurface3d& surface;
 
+  /** Allocation-free sampler shared by the inverse solve and tessellation. */
+  RationalSurfaceEvaluator evaluator;
+
   glm::dvec2 min_extent;
   glm::dvec2 max_extent;
 
-  RationalNurbsInverseMethod( const tinynurbs::RationalSurface3d& srf ) : surface( srf ) {
+  RationalNurbsInverseMethod( const tinynurbs::RationalSurface3d& srf )
+    : surface( srf ), evaluator( srf ) {
 
     size_t degreeU = static_cast< size_t >( srf.degree_u );
     size_t degreeV = static_cast< size_t >( srf.degree_v );
@@ -973,11 +982,7 @@ struct RationalNurbsInverseMethod {
             static_cast< double >( i ) * INVERSE_GRID_FACTOR,
             static_cast< double >( j ) * INVERSE_GRID_FACTOR );
 
-        grid[ i ][ j ] =
-          tinynurbs::surfacePoint(
-            srf,
-            uv.x,
-            uv.y );
+        grid[ i ][ j ] = evaluator.point( uv.x, uv.y );
       }
     }
   }
@@ -1026,7 +1031,7 @@ struct RationalNurbsInverseMethod {
         break;
       }
 
-      auto [dU, dV] = tinynurbs::surfaceTangent( surface, bestGuess.x, bestGuess.y );
+      auto [dU, dV] = evaluator.tangent( bestGuess.x, bestGuess.y );
 
       glm::dmat2x3 jacobianT( dU, dV ); // Jacobian
       glm::dmat3x2 jacobian = glm::transpose( jacobianT );   // Transposed Jacobian
@@ -1051,7 +1056,7 @@ struct RationalNurbsInverseMethod {
         newGuessUV = glm::clamp( newGuessUV, min_extent, max_extent );
 
         glm::dvec3 newPoint =
-          tinynurbs::surfacePoint( surface, newGuessUV.x, newGuessUV.y );
+          evaluator.point( newGuessUV.x, newGuessUV.y );
 
         glm::dvec3 newDeltaP = newPoint - point;
 
@@ -1186,8 +1191,10 @@ inline void TriangulateBspline(Geometry &geometry,
 
   std::vector<glm::dvec3> controlPoints;
 
-  for ( std::vector<glm::dvec3> row : surface.BSplineSurface.ControlPoints ) {
-    for (glm::dvec3 point : row) {
+  controlPoints.reserve( num_u * num_v );
+
+  for ( const std::vector<glm::dvec3>& row : surface.BSplineSurface.ControlPoints ) {
+    for (const glm::dvec3& point : row) {
       controlPoints.push_back({point.x, point.y, point.z});
     }
   }
@@ -1195,8 +1202,9 @@ inline void TriangulateBspline(Geometry &geometry,
   srf.control_points = tinynurbs::array2(num_u, num_v, controlPoints);
 
   std::vector<double> weights;
+  weights.reserve( num_u * num_v );
   // for (std::vector<double> row : surface.BSplineSurface.WeightPoints) {
-  for (std::vector<double> row : surface.BSplineSurface.Weights) {
+  for (const std::vector<double>& row : surface.BSplineSurface.Weights) {
     for (double weight : row) {
       weights.push_back(weight);
     }
@@ -1227,9 +1235,13 @@ inline void TriangulateBspline(Geometry &geometry,
 
 //  printf( "Evaluating inverse parameter space\n" );
 
-  RationalNurbsInverseMethod bSplineInverseEvaluation( srf );
-
   if (tinynurbs::surfaceIsValid(srf)) {
+
+    // Constructed only for valid surfaces: this builds the homogeneous
+    // control grid and samples the inverse-evaluation seed grid, all of
+    // which would be wasted on the invalid-surface path below.
+    RationalNurbsInverseMethod bSplineInverseEvaluation( srf );
+
     // Find projected boundary using NURBS inverse evaluation
 
     using Point = std::array<double, 2>;
@@ -1281,8 +1293,8 @@ inline void TriangulateBspline(Geometry &geometry,
 
     tesselate(
       mesh,
-      [&srf]( [[maybe_unused]]const glm::dvec3&, const glm::dvec2& from ) { 
-        return tinynurbs::surfacePoint(srf, from.x, from.y); 
+      [&bSplineInverseEvaluation]( [[maybe_unused]]const glm::dvec3&, const glm::dvec2& from ) {
+        return bSplineInverseEvaluation.evaluator.point( from.x, from.y );
       },
       mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
       MAX_DEFLECTION );

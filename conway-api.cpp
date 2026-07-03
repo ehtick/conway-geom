@@ -241,6 +241,45 @@ void AddFaceToGeometrySimple(
   }
 }
 
+void StageFaceToGeometry(
+    conway::geometry::ConwayGeometryProcessor::ParamsAddFaceToGeometry&
+        parameters,
+    conway::geometry::Geometry& geometry) {
+  if (processor) {
+    processor->StageFaceToGeometry(parameters, geometry);
+  }
+}
+
+void StageFaceToGeometrySimple(
+    conway::geometry::ConwayGeometryProcessor::ParamsAddFaceToGeometrySimple&
+        parameters,
+    conway::geometry::Geometry& geometry) {
+  if (processor) {
+    processor->StageFaceToGeometrySimple(parameters, geometry);
+  }
+}
+
+void FinalizeStagedFaces() {
+  if (processor) {
+    processor->FinalizeStagedFaces();
+  }
+}
+
+/**
+ * True when this module was linked with an allocator that scales across
+ * threads (e.g. -sMALLOC=mimalloc + -DCONWAY_SCALABLE_ALLOCATOR). With the
+ * default dlmalloc, a single global lock serialises allocation, and
+ * allocation-heavy parallel tessellation can run slower than serial — so
+ * callers should prefer the immediate path unless this returns true.
+ */
+bool HasScalableAllocator() {
+#if defined(CONWAY_SCALABLE_ALLOCATOR)
+  return true;
+#else
+  return false;
+#endif
+}
+
 std::vector<glm::dvec3> createVertexVector(uintptr_t verticesArray_,
   size_t length) {
   const double* verticesArray = reinterpret_cast<double*>(verticesArray_);
@@ -1812,6 +1851,10 @@ EMSCRIPTEN_BINDINGS(my_module) {
     emscripten::allow_raw_pointers());
   emscripten::function("addFaceToGeometry", &AddFaceToGeometry);
   emscripten::function("addFaceToGeometrySimple", &AddFaceToGeometrySimple);
+  emscripten::function("stageFaceToGeometry", &StageFaceToGeometry);
+  emscripten::function("stageFaceToGeometrySimple", &StageFaceToGeometrySimple);
+  emscripten::function("finalizeStagedFaces", &FinalizeStagedFaces);
+  emscripten::function("hasScalableAllocator", &HasScalableAllocator);
   emscripten::function("getRectangleProfileCurve", &GetRectangleProfileCurve);
   emscripten::function("getIdentityTransform", &getIdentityTransform);
   emscripten::function("multiplyNativeMatrices", &multiplyNativeMatrices);

@@ -450,6 +450,68 @@ export class ConwayGeometry {
   }
 
   /**
+   * Whether this wasm module supports deferred (parallel) face tessellation.
+   *
+   * @return {boolean} true when the staged face API is available.
+   */
+  supportsStagedFaces(): boolean {
+    return typeof this.wasmModule.stageFaceToGeometry === 'function'
+  }
+
+  /**
+   * Whether this wasm module was linked with an allocator that scales
+   * across threads (see conway-api HasScalableAllocator). With the default
+   * dlmalloc, allocation-heavy parallel tessellation can be slower than
+   * serial, so callers should prefer the immediate path when this is false.
+   *
+   * @return {boolean} true when built with a thread-scalable allocator.
+   */
+  hasScalableAllocator(): boolean {
+    return typeof this.wasmModule.hasScalableAllocator === 'function' &&
+      this.wasmModule.hasScalableAllocator()
+  }
+
+  /**
+   * Deferred variant of addFaceToGeometry: stages the face so a later
+   * finalizeStagedFaces call can tessellate faces in parallel. Results are
+   * appended to each face's target geometry in staging order, making the
+   * output identical to the immediate call. Callers MUST call
+   * finalizeStagedFaces() before reading triangles from (or deleting) any
+   * target geometry.
+   *
+   * @param parameters ParamsAddFaceToGeometry parsed from data model
+   * @param geometry The target geometry the face will be appended to.
+   */
+  stageFaceToGeometry(parameters: ParamsAddFaceToGeometry, geometry: GeometryObject): void {
+    this.wasmModule.stageFaceToGeometry(parameters, geometry)
+  }
+
+  /**
+   * Deferred variant of addFaceToGeometrySimple, see stageFaceToGeometry.
+   *
+   * @param parameters ParamsAddFaceToGeometrySimple parsed from data model
+   * @param geometry The target geometry the face will be appended to.
+   */
+  stageFaceToGeometrySimple(
+      parameters: ParamsAddFaceToGeometrySimple,
+      geometry: GeometryObject): void {
+    this.wasmModule.stageFaceToGeometrySimple(parameters, geometry)
+  }
+
+  /**
+   * Tessellate all staged faces (in parallel where threads are available)
+   * and append the results to their target geometries in staging order.
+   *
+   * A no-op on wasm modules that predate the staged face API, so callers
+   * can invoke it defensively without checking supportsStagedFaces().
+   */
+  finalizeStagedFaces(): void {
+    if ( this.supportsStagedFaces() ) {
+      this.wasmModule.finalizeStagedFaces()
+    }
+  }
+
+  /**
    *
    * @param parameters - ParamsCartesianTransformationOperator3D parsed from data model
    * @return {GeometryObject} - Native geometry object

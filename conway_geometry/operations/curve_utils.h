@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../logging/Logger.h"
+#include "nurbs_utils.h"
 #include "representation/ConwayCurve.h"
 
 namespace conway::geometry {
@@ -200,8 +201,51 @@ inline glm::dvec3 InterpolateRationalBSplineCurveWithKnots(
     }
   }
 
-  // TODO: this should be done before calling the function, instead of calling
-  // it for each t convert points to homogeneous coordinates
+  // De Boor only ever touches control points [s - degree, s], so convert
+  // just that window to homogeneous coordinates on the stack instead of
+  // converting (and copying) the entire control polygon per sample.
+  if ( degree <= static_cast< int >( NURBS_MAX_STACK_DEGREE ) &&
+       s - degree >= 0 &&
+       s < static_cast< int >( points.size() ) &&
+       s < static_cast< int >( weights.size() ) ) {
+
+    glm::dvec4 window[ NURBS_MAX_STACK_DEGREE + 1 ];
+
+    int windowBase = s - degree;
+
+    for (int j = 0; j <= degree; j++) {
+      const glm::dvec3& p = points[ windowBase + j ];
+      double w = weights[ windowBase + j ];
+
+      window[ j ] = glm::dvec4( p.x * w, p.y * w, p.z * w, w );
+    }
+
+    // l (level) goes from 1 to the curve degree + 1
+    for (int l = 1; l <= degree + 1; l++) {
+      // build level l of the pyramid
+      for (int i = s; i > s - degree - 1 + l; i--) {
+        double alpha = (tPrime - knots[i]) / (knots[i + degree + 1 - l] - knots[i]);
+
+        glm::dvec4& current  = window[ i - windowBase ];
+        glm::dvec4& previous = window[ i - windowBase - 1 ];
+
+        double x = (1 - alpha) * previous.x + alpha * current.x;
+        double y = (1 - alpha) * previous.y + alpha * current.y;
+        double z = (1 - alpha) * previous.z + alpha * current.z;
+        double w = (1 - alpha) * previous.w + alpha * current.w;
+
+        current = glm::dvec4(x, y, z, w);
+      }
+    }
+
+    const glm::dvec4& result = window[ degree ];
+
+    return glm::dvec3(result.x / result.w,
+                      result.y / result.w,
+                      result.z / result.w);
+  }
+
+  // Fallback for extreme degrees / malformed spans: full conversion.
   std::vector<glm::dvec4> homogeneousPoints;
   for (size_t i = 0; i < points.size(); i++) {
     glm::dvec3 p = points[i];
@@ -267,8 +311,49 @@ inline glm::dvec2 InterpolateRationalBSplineCurveWithKnots(
     }
   }
 
-  // TODO: this should be done before calling the function, instead of calling
-  // it for each t convert points to homogeneous coordinates
+  // De Boor only ever touches control points [s - degree, s], so convert
+  // just that window to homogeneous coordinates on the stack instead of
+  // converting (and copying) the entire control polygon per sample.
+  if ( degree <= static_cast< int >( NURBS_MAX_STACK_DEGREE ) &&
+       s - degree >= 0 &&
+       s < static_cast< int >( points.size() ) &&
+       s < static_cast< int >( weights.size() ) ) {
+
+    glm::dvec3 window[ NURBS_MAX_STACK_DEGREE + 1 ];
+
+    int windowBase = s - degree;
+
+    for (int j = 0; j <= degree; j++) {
+      const glm::dvec2& p = points[ windowBase + j ];
+      double w = weights[ windowBase + j ];
+
+      window[ j ] = glm::dvec3( p.x * w, p.y * w, w );
+    }
+
+    // l (level) goes from 1 to the curve degree + 1
+    for (int l = 1; l <= degree + 1; l++) {
+      // build level l of the pyramid
+      for (int i = s; i > s - degree - 1 + l; i--) {
+        double alphaLevel =
+            (tPrime - knots[i]) / (knots[i + degree + 1 - l] - knots[i]);
+
+        glm::dvec3& current  = window[ i - windowBase ];
+        glm::dvec3& previous = window[ i - windowBase - 1 ];
+
+        double x = (1 - alphaLevel) * previous.x + alphaLevel * current.x;
+        double y = (1 - alphaLevel) * previous.y + alphaLevel * current.y;
+        double w = (1 - alphaLevel) * previous.z + alphaLevel * current.z;
+
+        current = glm::dvec3(x, y, w);
+      }
+    }
+
+    const glm::dvec3& result = window[ degree ];
+
+    return glm::dvec2(result.x / result.z, result.y / result.z);
+  }
+
+  // Fallback for extreme degrees / malformed spans: full conversion.
   std::vector<glm::dvec3> homogeneousPoints;
   for (size_t i = 0; i < points.size(); i++) {
     glm::dvec2 p = points[i];
