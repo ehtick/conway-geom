@@ -182,7 +182,7 @@ project "conway_geom_native"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS"] -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"] -lworkerfs.js'
         }
 
     configuration {}
@@ -346,7 +346,7 @@ project "conway_geom_native_tests"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -sSTACK_SIZE=5MB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native_tests -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS"] -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -sSTACK_SIZE=5MB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native_tests -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"] -lworkerfs.js'
         }
 
     configuration {}
@@ -510,7 +510,7 @@ project "webifc_native"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=webifc_native -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS"] -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=webifc_native -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"] -lworkerfs.js'
         }
 
     configuration {}
@@ -657,7 +657,7 @@ project "webifc_native"
             "-s EXPORT_NAME=ConwayGeomWasm",
             "-s ABORTING_MALLOC=0",
             --"-s USE_ES6_IMPORT_META=0",
-            "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+            "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
             "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
             "-s EXPORT_ES6=1",
             "-s MODULARIZE=1",
@@ -691,7 +691,7 @@ project "webifc_native"
             "-s EXPORT_ES6=1",
             "-s MODULARIZE=1",
             "-s ABORTING_MALLOC=0",
-            "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+            "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
             "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
             "-lworkerfs.js",
             "-sNO_DISABLE_EXCEPTION_CATCHING",
@@ -890,7 +890,7 @@ linkoptions {
     "-s EXPORT_NAME=ConwayGeomWasm",
     "-s ABORTING_MALLOC=0",
     --"-s USE_ES6_IMPORT_META=0",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
@@ -929,7 +929,7 @@ linkoptions {
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
     "-s ABORTING_MALLOC=0",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-lworkerfs.js",
     "-sNO_DISABLE_EXCEPTION_CATCHING",
@@ -1127,7 +1127,7 @@ if _ARGS[1] == "profile" and _ARGS[2] ~= nil then
         "-s SAFE_HEAP=1",
         "-s EXPORT_NAME=ConwayGeomWasm",
         "-s USE_ES6_IMPORT_META=0",
-        "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+        "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
         "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
         "-s EXPORT_ES6=1",
         "-s MODULARIZE=1",
@@ -1158,7 +1158,7 @@ else
         "-s USE_ES6_IMPORT_META=0",
         "-s EXPORT_ES6=1",
         "-s MODULARIZE=1",
-        "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+        "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
         "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
         "-lworkerfs.js",
         "-sNO_DISABLE_EXCEPTION_CATCHING",
@@ -1354,7 +1354,7 @@ linkoptions {
     --"-s SAFE_HEAP=1",
     "-s EXPORT_NAME=ConwayGeomWasm",
     "-s USE_ES6_IMPORT_META=0",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
@@ -1388,7 +1388,7 @@ linkoptions {
     "-s USE_ES6_IMPORT_META=0",
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS\"]",
+    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-lworkerfs.js",
     "-sNO_DISABLE_EXCEPTION_CATCHING",
