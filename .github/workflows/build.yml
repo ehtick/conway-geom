@@ -1,7 +1,9 @@
 name: Development Build
 
 env:
-  EMSDK_VERSION: 3.1.58
+  # Keep in sync with EMSDK_VERSION in bldrs-ai/conway's build.yml — conway
+  # ships the Dist artifacts built on that toolchain.
+  EMSDK_VERSION: 6.0.2
   EMSDK_CACHE_FOLDER: 'cache/emsdk'
 
 on:

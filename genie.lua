@@ -1,6 +1,12 @@
 local nodeCores = "Math.max(require('os').cpus().length - 1, 1)"
 local webCores  = "Math.max(navigator.hardwareConcurrency - 1, 1)"
 
+-- Runtime methods conway's TS glue accesses on the module object.
+-- Emscripten >= 4.0.7 stops exporting these by default and hard-errors on
+-- any missing EXPORTED_RUNTIME_METHODS entry at runtime, so every wasm
+-- target exports the same list; edit it here only.
+local exportedRuntimeMethods = '-s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"]'
+
 solution "conway_geom"
     configurations {
         "Debug",
@@ -182,7 +188,7 @@ project "conway_geom_native"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"] -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
         }
 
     configuration {}
@@ -346,7 +352,7 @@ project "conway_geom_native_tests"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -sSTACK_SIZE=5MB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native_tests -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"] -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -sSTACK_SIZE=5MB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native_tests -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
         }
 
     configuration {}
@@ -510,7 +516,7 @@ project "webifc_native"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=webifc_native -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"] -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=webifc_native -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
         }
 
     configuration {}
@@ -656,8 +662,7 @@ project "webifc_native"
             "-s NODERAWFS=1",
             "-s EXPORT_NAME=ConwayGeomWasm",
             "-s ABORTING_MALLOC=0",
-            --"-s USE_ES6_IMPORT_META=0",
-            "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+                    exportedRuntimeMethods,
             "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
             "-s EXPORT_ES6=1",
             "-s MODULARIZE=1",
@@ -687,11 +692,10 @@ project "webifc_native"
             "-s EXPORT_NAME=ConwayGeomWasm",
             "-s ENVIRONMENT=node,worker",
             "-s SINGLE_FILE=1",
-            --"-s USE_ES6_IMPORT_META=0",
-            "-s EXPORT_ES6=1",
+                    "-s EXPORT_ES6=1",
             "-s MODULARIZE=1",
             "-s ABORTING_MALLOC=0",
-            "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+            exportedRuntimeMethods,
             "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
             "-lworkerfs.js",
             "-sNO_DISABLE_EXCEPTION_CATCHING",
@@ -877,7 +881,9 @@ linkoptions {
     "-flto",
     "-s PRECISE_F32=1",
     "--define-macro=REAL_T_IS_DOUBLE",
-    "-s ENVIRONMENT=node",
+    -- profile mode links -lworkerfs.js without -pthread (commented below), so
+    -- emscripten >= 6 needs the worker environment here, like the non-MT targets.
+    "-s ENVIRONMENT=node,worker",
     "-s ALLOW_MEMORY_GROWTH=1",
     "-s MAXIMUM_MEMORY=4GB",
     "-s STACK_SIZE=10MB",
@@ -889,8 +895,7 @@ linkoptions {
 --     "-s SAFE_HEAP=1",
     "-s EXPORT_NAME=ConwayGeomWasm",
     "-s ABORTING_MALLOC=0",
-    --"-s USE_ES6_IMPORT_META=0",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+    exportedRuntimeMethods,
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
@@ -925,11 +930,10 @@ linkoptions {
     "-s EXPORT_NAME=ConwayGeomWasm",
     "-s ENVIRONMENT=node",
     "-s SINGLE_FILE=1",
-    --"-s USE_ES6_IMPORT_META=0",
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
     "-s ABORTING_MALLOC=0",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+    exportedRuntimeMethods,
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-lworkerfs.js",
     "-sNO_DISABLE_EXCEPTION_CATCHING",
@@ -1126,7 +1130,7 @@ if _ARGS[1] == "profile" and _ARGS[2] ~= nil then
         "-sASSERTIONS",
         "-s SAFE_HEAP=1",
         "-s EXPORT_NAME=ConwayGeomWasm",
-        "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+        exportedRuntimeMethods,
         "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
         "-s EXPORT_ES6=1",
         "-s MODULARIZE=1",
@@ -1156,7 +1160,7 @@ else
         "-s SINGLE_FILE=1",
         "-s EXPORT_ES6=1",
         "-s MODULARIZE=1",
-        "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+        exportedRuntimeMethods,
         "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
         "-lworkerfs.js",
         "-sNO_DISABLE_EXCEPTION_CATCHING",
@@ -1351,7 +1355,7 @@ linkoptions {
     --"-sASSERTIONS",
     --"-s SAFE_HEAP=1",
     "-s EXPORT_NAME=ConwayGeomWasm",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+    exportedRuntimeMethods,
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
@@ -1384,7 +1388,7 @@ linkoptions {
     "-s ENVIRONMENT=web,worker",
     "-s EXPORT_ES6=1",
     "-s MODULARIZE=1",
-    "-s EXPORTED_RUNTIME_METHODS=[\"FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64\"]",
+    exportedRuntimeMethods,
     "-s EXPORTED_FUNCTIONS=[\"_malloc, _free\"]",
     "-lworkerfs.js",
     "-sNO_DISABLE_EXCEPTION_CATCHING",
