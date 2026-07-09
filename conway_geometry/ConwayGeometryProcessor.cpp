@@ -20,6 +20,7 @@
 
 #include "csg/csg.h"
 
+#include "structures/alloc_telemetry.h"
 #include "structures/thread_pool.h"
 #include "structures/vertex_welder.h"
 
@@ -519,16 +520,18 @@ Geometry ConwayGeometryProcessor::GetPolygonalBoundedHalfspace(
 
 
 
-void ConwayGeometryProcessor::AddFaceToGeometrySimple( 
+void ConwayGeometryProcessor::AddFaceToGeometrySimple(
   ParamsAddFaceToGeometrySimple& parameters, Geometry &geometry) {
+  AllocTelemetryScope telemetryScope;
   if (parameters.boundsArray.size() > 0) {
-    
+
     TriangulateBounds(geometry, parameters.boundsArray);
   }
 }
 
 void ConwayGeometryProcessor::AddFaceToGeometry(
     ParamsAddFaceToGeometry& parameters, Geometry &geometry) {
+  AllocTelemetryScope telemetryScope;
   if (!parameters.advancedBrep) {
     if (parameters.boundsArray.size() > 0) {
       TriangulateBounds(geometry, parameters.boundsArray);

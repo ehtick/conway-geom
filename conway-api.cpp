@@ -11,6 +11,7 @@
 #include "utilities/buffer_parse.h"
 #include "structures/parse_buffer.h"
 #include "conway_geometry/ConwayGeometryProcessor.h"
+#include "conway_geometry/structures/alloc_telemetry.h"
 #include "logging/Logger.h"
 
 
@@ -278,6 +279,19 @@ bool HasScalableAllocator() {
 #else
   return false;
 #endif
+}
+
+/**
+ * AFTP telemetry hooks (no-ops unless the module was built with
+ * CONWAY_ALLOC_TELEMETRY — see structures/alloc_telemetry.h). Callers can
+ * dump/reset the per-face allocation histogram, typically once per model.
+ */
+void DumpAllocTelemetryBinding(const std::string& label) {
+  conway::DumpAllocTelemetry(label.c_str());
+}
+
+void ResetAllocTelemetryBinding() {
+  conway::ResetAllocTelemetry();
 }
 
 std::vector<glm::dvec3> createVertexVector(uintptr_t verticesArray_,
@@ -1855,6 +1869,8 @@ EMSCRIPTEN_BINDINGS(my_module) {
   emscripten::function("stageFaceToGeometrySimple", &StageFaceToGeometrySimple);
   emscripten::function("finalizeStagedFaces", &FinalizeStagedFaces);
   emscripten::function("hasScalableAllocator", &HasScalableAllocator);
+  emscripten::function("dumpAllocTelemetry", &DumpAllocTelemetryBinding);
+  emscripten::function("resetAllocTelemetry", &ResetAllocTelemetryBinding);
   emscripten::function("getRectangleProfileCurve", &GetRectangleProfileCurve);
   emscripten::function("getIdentityTransform", &getIdentityTransform);
   emscripten::function("multiplyNativeMatrices", &multiplyNativeMatrices);
