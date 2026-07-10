@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <new>
 #include <vector>
 
@@ -190,6 +191,44 @@ class ScratchArenaScope {
   ScratchArena& arena_;
   ScratchArena::Marker mark_;
 };
+
+/**
+ * A std::pmr memory resource backed by a ScratchArena. This lets *type-erased*
+ * pmr containers (std::pmr::vector / std::pmr::unordered_map — e.g. the
+ * WingedEdgeMesh storage) draw from the arena without becoming a distinct type
+ * per allocator: the resource is a runtime pointer, so a pmr WingedEdgeMesh is
+ * one type whether it's arena-backed or heap-backed. deallocate is a no-op;
+ * the arena reclaims wholesale at reset()/rewind().
+ */
+class ScratchArenaResource : public std::pmr::memory_resource {
+ public:
+  explicit ScratchArenaResource(ScratchArena& arena) : arena_(&arena) {}
+
+ private:
+  void* do_allocate(std::size_t bytes, std::size_t align) override {
+    return arena_->allocate(bytes, align);
+  }
+  void do_deallocate(void* /*p*/, std::size_t /*bytes*/,
+                     std::size_t /*align*/) override {}
+  bool do_is_equal(
+      const std::pmr::memory_resource& other) const noexcept override {
+    return this == &other;
+  }
+
+  ScratchArena* arena_;
+};
+
+/**
+ * The calling thread's scratch arena exposed as a pmr memory resource. Pair
+ * with a ScratchArenaScope at the per-face boundary so the arena rewinds after
+ * the pmr containers built on it are done. Never outlive a rewind.
+ *
+ * @return A pmr resource that allocates from this thread's ScratchArena.
+ */
+inline std::pmr::memory_resource* ThreadScratchResource() {
+  static thread_local ScratchArenaResource resource(ThreadScratchArena());
+  return &resource;
+}
 
 /**
  * A minimal C++ allocator that draws from a ScratchArena, so existing STL

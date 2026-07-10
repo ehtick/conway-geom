@@ -488,7 +488,11 @@ inline void TriangulateConicalSurface(
   std::vector<std::vector<Point>> uvBoundaryValues;
   std::vector<ParameterVertex> vertices;
 
-  WingedEdgeMesh< ParameterVertex > mesh;
+  // AFTP: back this per-face tessellation mesh (esp. edge_map, which allocates
+  // a node per edge) with the thread scratch arena, rewound at function exit.
+  // Byte-identical: the arena changes only where the mesh's nodes live.
+  conway::ScratchArenaScope arenaScope;
+  WingedEdgeMesh< ParameterVertex > mesh{ conway::ThreadScratchResource() };
 
   while ( !outsideMostBoundaries.empty() ) {
 
@@ -683,7 +687,11 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
   std::vector<std::vector<Point>> uvBoundaryValues;
   std::vector<ParameterVertex> vertices;
 
-  WingedEdgeMesh< ParameterVertex > mesh;
+  // AFTP: back this per-face tessellation mesh (esp. edge_map, which allocates
+  // a node per edge) with the thread scratch arena, rewound at function exit.
+  // Byte-identical: the arena changes only where the mesh's nodes live.
+  conway::ScratchArenaScope arenaScope;
+  WingedEdgeMesh< ParameterVertex > mesh{ conway::ThreadScratchResource() };
 
   double zScale = 0.5 / ( maxZ - minZ );
 
@@ -1249,7 +1257,9 @@ inline void TriangulateBspline(Geometry &geometry,
 
     std::vector<ParameterVertex> vertices;
 
-    WingedEdgeMesh< ParameterVertex > mesh;
+    // AFTP: arena-back this per-face mesh (esp. edge_map); rewound at scope exit.
+    conway::ScratchArenaScope arenaScope;
+    WingedEdgeMesh< ParameterVertex > mesh{ conway::ThreadScratchResource() };
 
     for ( size_t i = 0; i < bounds.size(); ++i ) {
 

@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory_resource>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -139,6 +141,33 @@ void testMarkerSpill() {
   check(arena.spillCount() == 2, "post-rewind spill counted");
 }
 
+// The pmr resource routes std::pmr containers (vector + unordered_map, the
+// WingedEdgeMesh storage shape) through a ScratchArena, with no per-face malloc
+// once the arena buffer is warm.
+void testPmrResource() {
+  conway::ScratchArena arena(1u << 20);
+  conway::ScratchArenaResource resource(arena);
+
+  std::pmr::vector<int> v(&resource);
+  std::pmr::unordered_map<std::uint64_t, std::uint32_t> m(&resource);
+  for (int i = 0; i < 500; ++i) {
+    v.push_back(i);
+    m[static_cast<std::uint64_t>(i)] = static_cast<std::uint32_t>(i * 2);
+  }
+  long sum = 0;
+  for (int x : v) {
+    sum += x;
+  }
+  check(sum == 124750, "pmr vector holds correct values");
+  check(m[499] == 998u, "pmr unordered_map holds correct values");
+  check(arena.highWater() > 0 || arena.spillCount() > 0,
+        "pmr containers drew from the arena");
+  // is_equal: the same resource compares equal to itself, not to another.
+  conway::ScratchArenaResource other(arena);
+  check(resource.is_equal(resource), "resource equals itself");
+  check(!resource.is_equal(other), "distinct resources are not equal");
+}
+
 }  // namespace
 
 int main() {
@@ -149,6 +178,7 @@ int main() {
   testScope();
   testNesting();
   testMarkerSpill();
+  testPmrResource();
 
   if (g_failures == 0) {
     std::printf("scratch_arena_test: all checks passed\n");
