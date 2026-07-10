@@ -4,6 +4,8 @@
 #include <glm/glm.hpp>
 
 #include "structures/winged_edge.h"
+#include "structures/scratch_arena.h"
+#include <memory_resource>
 #include <queue>
 #include "representation/Geometry.h"
 #include "representation/IfcGeometryReps.h"
@@ -200,7 +202,18 @@ namespace conway::geometry {
     int32_t maximumTriangles,
     double minimumDeflection ) {
 
-    std::priority_queue< CandidateEdge< ParameterVertex > > candidates;
+    // AFTP: back the subdivision candidate heap with the thread scratch arena
+    // too (this runs inside the per-face ScratchArenaScope of the ParameterVertex
+    // tessellators). Byte-identical: heap order is set by the comparator, not the
+    // allocator. Explicit std::less matches the default priority_queue ordering.
+    std::priority_queue<
+      CandidateEdge< ParameterVertex >,
+      std::pmr::vector< CandidateEdge< ParameterVertex > >,
+      std::less< CandidateEdge< ParameterVertex > > >
+      candidates{
+        std::less< CandidateEdge< ParameterVertex > >(),
+        std::pmr::vector< CandidateEdge< ParameterVertex > >(
+          conway::ThreadScratchResource() ) };
 
     auto addCandidate = [&]( uint32_t edgeIndex ) {
 
