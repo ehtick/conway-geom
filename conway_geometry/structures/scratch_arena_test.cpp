@@ -5,6 +5,12 @@
 //   c++ -std=c++20 -O2 -o /tmp/sa_test scratch_arena_test.cpp && /tmp/sa_test
 //
 // Exit 0 = all checks passed; non-zero = the first failed assertion.
+//
+// Guarded by CONWAY_SCRATCH_ARENA_STANDALONE_TEST so this file is an empty
+// translation unit in the normal build (the genie ConwayCoreFiles glob pulls in
+// conway_geometry/structures/**, and a stray main() would clash with the wasm
+// module entry). Build the standalone test with the define set.
+#ifdef CONWAY_SCRATCH_ARENA_STANDALONE_TEST
 
 #include "scratch_arena.h"
 
@@ -86,7 +92,7 @@ void testAllocatorAdapter() {
   check(ad.arena_ == &arena, "rebound allocator keeps the arena");
 }
 
-// The scope guard resets its arena on destruction (per-face boundary).
+// The scope guard rewinds its arena on destruction (per-face boundary).
 void testScope() {
   conway::ScratchArena arena(4096);
   void* base;
@@ -95,7 +101,42 @@ void testScope() {
     base = scope.arena().allocate(512, 16);
   }
   void* afterScope = arena.allocate(512, 16);
-  check(base == afterScope, "scope guard reset the arena on exit");
+  check(base == afterScope, "scope guard rewound the arena on exit");
+}
+
+// Nested scopes: an inner scope must free ONLY its own scratch, never the
+// outer scope's still-live allocations (the use-after-reset hazard that a
+// reset-to-zero scope would cause when tessellation helpers nest).
+void testNesting() {
+  conway::ScratchArena arena(4096);
+  conway::ScratchArenaScope outer(arena);
+  int* outerBuf = static_cast<int*>(arena.allocate(sizeof(int) * 4, alignof(int)));
+  outerBuf[0] = 0xABCD;
+  void* innerFirst;
+  {
+    conway::ScratchArenaScope inner(arena);
+    innerFirst = arena.allocate(256, 16);
+    (void)arena.allocate(256, 16);
+  }
+  // outer's data survives the inner scope...
+  check(outerBuf[0] == 0xABCD, "outer scratch survives inner scope exit");
+  // ...and the inner region is reused after the inner scope closes.
+  void* reused = arena.allocate(256, 16);
+  check(reused == innerFirst, "inner scope freed only its own region");
+}
+
+// Marker/rewind restores spill bookkeeping too: spills taken after a mark are
+// freed on rewind, but the lifetime spill count is not rolled back.
+void testMarkerSpill() {
+  conway::ScratchArena arena(64);
+  auto m = arena.mark();
+  (void)arena.allocate(4096, 16);  // spill after the mark
+  check(arena.spillCount() == 1, "spill counted");
+  arena.rewind(m);
+  check(arena.spillCount() == 1, "rewind keeps lifetime spill count");
+  // A fresh spill after rewind reuses the freed slot bookkeeping cleanly.
+  (void)arena.allocate(4096, 16);
+  check(arena.spillCount() == 2, "post-rewind spill counted");
 }
 
 }  // namespace
@@ -106,6 +147,8 @@ int main() {
   testSpill();
   testAllocatorAdapter();
   testScope();
+  testNesting();
+  testMarkerSpill();
 
   if (g_failures == 0) {
     std::printf("scratch_arena_test: all checks passed\n");
@@ -114,3 +157,5 @@ int main() {
   std::fprintf(stderr, "scratch_arena_test: %d failure(s)\n", g_failures);
   return 1;
 }
+
+#endif  // CONWAY_SCRATCH_ARENA_STANDALONE_TEST

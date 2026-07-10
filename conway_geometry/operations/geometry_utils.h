@@ -25,6 +25,7 @@
 #include "representation/IfcGeometryReps.h"
 #include "logging/Logger.h"
 #include "manifold_utils.h"
+#include "../structures/scratch_arena.h"
 
 #if !defined(_USE_MATH_DEFINES)
 #define _USE_MATH_DEFINES 1
@@ -611,7 +612,17 @@ inline void TriangulateBounds(Geometry &geometry,
     // TODO: modify to use glm::dvec2 with custom accessors
     using Point = std::array<double, 2>;
 
-    std::vector<std::vector<Point>> polygon;
+    // AFTP: the projected-point rings below are pure per-face scratch — built
+    // here, fed to earcut, and only their *values* are copied into `geometry`.
+    // Draw them from this thread's bump arena and rewind at function exit
+    // (nestable checkpoint, so the several callers of TriangulateBounds are all
+    // covered). No geometry changes: earcut reads the same doubles.
+    ScratchArenaScope arenaScope;
+    using ScratchPointVec =
+        std::vector<Point, conway::ScratchAllocator<Point>>;
+
+    std::vector<ScratchPointVec, conway::ScratchAllocator<ScratchPointVec>>
+        polygon;
 
     uint32_t offset = geometry.vertices.size();
 
@@ -707,7 +718,7 @@ inline void TriangulateBounds(Geometry &geometry,
 
     for (auto &bound : bounds) {
 
-      std::vector<Point> points;
+      ScratchPointVec points;
 
       for (size_t i = 0; i < bound.curve.points.size(); i++) {
 
@@ -723,7 +734,7 @@ inline void TriangulateBounds(Geometry &geometry,
         points.push_back({proj.x, proj.y});
       }
 
-      polygon.push_back(points);
+      polygon.push_back(std::move(points));
     }
 
     std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(polygon);

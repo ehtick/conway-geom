@@ -95,7 +95,34 @@ class ScratchArena {
     return p;
   }
 
-  /** Rewind to the base and release spilled blocks. Call per face. */
+  /**
+   * A saved position in the arena. Take one with mark(), restore it with
+   * rewind() — this makes scopes nestable (an inner scope frees only what it
+   * allocated, never the outer scope's still-live scratch), which a plain
+   * reset-to-zero cannot do safely when tessellation helpers call each other.
+   */
+  struct Marker {
+    std::size_t offset;
+    std::size_t liveSpills;
+  };
+
+  /** Capture the current position for a later rewind(). */
+  Marker mark() const { return Marker{offset_, spills_.size()}; }
+
+  /**
+   * Restore to a previously marked position: rewind the bump offset and free
+   * only the spills allocated after the mark. Lifetime spill stats are left
+   * intact (they measure the whole run).
+   */
+  void rewind(Marker m) {
+    for (std::size_t i = m.liveSpills; i < spills_.size(); ++i) {
+      ::operator delete(spills_[i]);
+    }
+    spills_.resize(m.liveSpills);
+    offset_ = m.offset;
+  }
+
+  /** Rewind to the base and release all spilled blocks. */
   void reset() {
     offset_ = 0;
     freeSpills();
@@ -142,14 +169,17 @@ inline ScratchArena& ThreadScratchArena() {
 }
 
 /**
- * RAII guard that rewinds a scratch arena when it goes out of scope — the
- * per-face boundary. Defaults to the calling thread's arena.
+ * RAII guard that checkpoints a scratch arena on construction and rewinds to
+ * that checkpoint on destruction — the per-face boundary. Because it restores
+ * the marked position (not zero), scopes nest safely: a helper that opens its
+ * own scope frees only its own scratch and leaves the caller's intact.
+ * Defaults to the calling thread's arena.
  */
 class ScratchArenaScope {
  public:
   explicit ScratchArenaScope(ScratchArena& arena = ThreadScratchArena())
-      : arena_(arena) {}
-  ~ScratchArenaScope() { arena_.reset(); }
+      : arena_(arena), mark_(arena.mark()) {}
+  ~ScratchArenaScope() { arena_.rewind(mark_); }
 
   ScratchArenaScope(const ScratchArenaScope&) = delete;
   ScratchArenaScope& operator=(const ScratchArenaScope&) = delete;
@@ -158,6 +188,7 @@ class ScratchArenaScope {
 
  private:
   ScratchArena& arena_;
+  ScratchArena::Marker mark_;
 };
 
 /**
