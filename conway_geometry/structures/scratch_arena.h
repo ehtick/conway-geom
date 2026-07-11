@@ -22,6 +22,7 @@
  * ThreadScratchArena() to get the calling thread's instance.
  */
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -132,6 +133,11 @@ class ScratchArena {
    * rewind() — this makes scopes nestable (an inner scope frees only what it
    * allocated, never the outer scope's still-live scratch), which a plain
    * reset-to-zero cannot do safely when tessellation helpers call each other.
+   *
+   * Markers MUST be rewound in strict LIFO (stack) order — exactly what
+   * ScratchArenaScope enforces. rewind() may release chunks grown above the
+   * restored position, so a marker taken *after* an outer marker is invalid
+   * once that outer marker has been rewound; reusing it is undefined.
    */
   struct Marker {
     std::size_t chunk;
@@ -139,7 +145,7 @@ class ScratchArena {
     std::size_t committedLower;
   };
 
-  /** Capture the current position for a later rewind(). */
+  /** Capture the current position for a later (LIFO-ordered) rewind(). */
   Marker mark() const { return Marker{current_, offset_, committedLower_}; }
 
   /**
@@ -147,8 +153,14 @@ class ScratchArena {
    * marked chunk/offset. Chunks grown after the mark become reusable free
    * space; the excess beyond the retention cap is released to the heap.
    * Lifetime growth stats are left intact (they measure the whole run).
+   *
+   * The marker must be valid for the current chunk set (LIFO discipline). The
+   * assert catches out-of-order rewind — which would leave current_ pointing at
+   * an already-released chunk — turning silent corruption into a diagnosable
+   * failure in debug builds (compiled out in release).
    */
   void rewind(Marker m) {
+    assert(m.chunk < chunks_.size());
     current_ = m.chunk;
     offset_ = m.offset;
     committedLower_ = m.committedLower;

@@ -184,6 +184,11 @@ void DumpAllocTelemetry(const char* label) {
       "nurbs_inverse", "tri_bounds",   "tri_bspline", "tri_cylinder",
       "tri_sphere",    "tri_toroidal", "tri_conical", "tri_revolution",
       "tri_extrusion"};
+  // Keep one name per AllocSite: adding an enumerator without a name here would
+  // otherwise be a silent out-of-bounds read in the loop below.
+  static_assert(sizeof(kSiteNames) / sizeof(kSiteNames[0]) ==
+                    static_cast<int>(AllocSite::Count),
+                "kSiteNames must have exactly one entry per AllocSite");
   for (int i = 0; i < static_cast<int>(AllocSite::Count); ++i) {
     uint64_t count = g_siteCounts[i].load();
     if (count == 0) {
