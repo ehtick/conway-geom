@@ -7,6 +7,13 @@ local webCores  = "Math.max(navigator.hardwareConcurrency - 1, 1)"
 -- target exports the same list; edit it here only.
 local exportedRuntimeMethods = '-s EXPORTED_RUNTIME_METHODS=["FS, WORKERFS, HEAP8, HEAPU8, HEAP32, HEAPU32, HEAPF32, HEAPF64"]'
 
+-- AFTP allocation-telemetry build variant (opt-in): run genie with
+-- CONWAY_ALLOC_TELEMETRY=1 in the environment to compile per-face allocation
+-- counters into the NodeMT module and interpose the system allocator
+-- (structures/alloc_telemetry.h). With the env var unset (the default, and
+-- always in CI) the generated makefiles are identical to before.
+local allocTelemetry = os.getenv("CONWAY_ALLOC_TELEMETRY")
+
 solution "conway_geom"
     configurations {
         "Debug",
@@ -938,6 +945,17 @@ linkoptions {
     "-lworkerfs.js",
     "-sNO_DISABLE_EXCEPTION_CATCHING",
 }
+if allocTelemetry then
+buildoptions_cpp {
+  "-DCONWAY_ALLOC_TELEMETRY"
+}
+linkoptions {
+    "-Wl,--wrap=malloc",
+    "-Wl,--wrap=calloc",
+    "-Wl,--wrap=realloc",
+    "-Wl,--wrap=free",
+}
+end
 end
 
 configuration {}

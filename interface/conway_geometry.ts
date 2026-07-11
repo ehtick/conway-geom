@@ -472,6 +472,20 @@ export class ConwayGeometry {
   }
 
   /**
+   * Print the AFTP per-face allocation telemetry summary to stderr, then
+   * reset the counters. No-op unless the module was built with
+   * CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).
+   *
+   * @param label Tag included in the dump output, typically the model name.
+   */
+  dumpAllocTelemetry(label: string): void {
+    if (typeof this.wasmModule.dumpAllocTelemetry === 'function') {
+      this.wasmModule.dumpAllocTelemetry(label)
+      this.wasmModule.resetAllocTelemetry()
+    }
+  }
+
+  /**
    * Deferred variant of addFaceToGeometry: stages the face so a later
    * finalizeStagedFaces call can tessellate faces in parallel. Results are
    * appended to each face's target geometry in staging order, making the

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <vector>
 #include <unordered_map>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <glm/glm.hpp>
@@ -48,13 +49,26 @@ namespace conway::geometry {
   template < typename VertexType >
   struct WingedEdgeMesh {
 
-    std::vector< ConnectedTriangle > triangles;
-    
-    std::vector< Edge > edges;
+    // pmr containers so a per-face scratch arena (see structures/scratch_arena.h,
+    // ThreadScratchResource) can back the mesh without changing WingedEdgeMesh's
+    // type — the resource is a runtime pointer, so tesselate()/appendMeshToGeometry
+    // signatures are unaffected. The default resource is new/delete, so meshes
+    // constructed without one (the CSG/manifold and glm::dvec* uses) behave
+    // exactly as before.
+    std::pmr::vector< ConnectedTriangle > triangles;
 
-    std::vector< VertexType > vertices;
+    std::pmr::vector< Edge > edges;
 
-    std::unordered_map< uint64_t, uint32_t > edge_map;
+    std::pmr::vector< VertexType > vertices;
+
+    std::pmr::unordered_map< uint64_t, uint32_t > edge_map;
+
+    explicit WingedEdgeMesh(
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource() )
+      : triangles( resource ),
+        edges( resource ),
+        vertices( resource ),
+        edge_map( resource ) {}
 
     void makeTriangle( uint32_t a, uint32_t b, uint32_t c, uint32_t index );
 

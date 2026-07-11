@@ -488,7 +488,11 @@ inline void TriangulateConicalSurface(
   std::vector<std::vector<Point>> uvBoundaryValues;
   std::vector<ParameterVertex> vertices;
 
-  WingedEdgeMesh< ParameterVertex > mesh;
+  // AFTP: back this per-face tessellation mesh (esp. edge_map, which allocates
+  // a node per edge) with the thread scratch arena, rewound at function exit.
+  // Byte-identical: the arena changes only where the mesh's nodes live.
+  conway::ScratchArenaScope arenaScope;
+  WingedEdgeMesh< ParameterVertex > mesh{ conway::ThreadScratchResource() };
 
   while ( !outsideMostBoundaries.empty() ) {
 
@@ -592,7 +596,11 @@ inline void TriangulateConicalSurface(
   // r indicates the level of subdivision, currently 3 you can increase it to
   // 5
 
-  std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  std::vector<uint32_t> indices;
+  {
+    conway::AllocTagScope earcutTag( conway::AllocSite::Earcut );
+    indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  }
 
   for (size_t i = 0; i < indices.size(); i += 3) {
 
@@ -683,7 +691,11 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
   std::vector<std::vector<Point>> uvBoundaryValues;
   std::vector<ParameterVertex> vertices;
 
-  WingedEdgeMesh< ParameterVertex > mesh;
+  // AFTP: back this per-face tessellation mesh (esp. edge_map, which allocates
+  // a node per edge) with the thread scratch arena, rewound at function exit.
+  // Byte-identical: the arena changes only where the mesh's nodes live.
+  conway::ScratchArenaScope arenaScope;
+  WingedEdgeMesh< ParameterVertex > mesh{ conway::ThreadScratchResource() };
 
   double zScale = 0.5 / ( maxZ - minZ );
 
@@ -787,7 +799,11 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
 #endif
 
-  std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  std::vector<uint32_t> indices;
+  {
+    conway::AllocTagScope earcutTag( conway::AllocSite::Earcut );
+    indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  }
 
   for (size_t i = 0; i < indices.size(); i += 3) {
 
@@ -1249,7 +1265,9 @@ inline void TriangulateBspline(Geometry &geometry,
 
     std::vector<ParameterVertex> vertices;
 
-    WingedEdgeMesh< ParameterVertex > mesh;
+    // AFTP: arena-back this per-face mesh (esp. edge_map); rewound at scope exit.
+    conway::ScratchArenaScope arenaScope;
+    WingedEdgeMesh< ParameterVertex > mesh{ conway::ThreadScratchResource() };
 
     for ( size_t i = 0; i < bounds.size(); ++i ) {
 
@@ -1263,7 +1281,11 @@ inline void TriangulateBspline(Geometry &geometry,
         pt.y *= scaling;
         pt.z *= scaling;
 
-        glm::dvec2 pInv = bSplineInverseEvaluation( pt );
+        glm::dvec2 pInv;
+        {
+          conway::AllocTagScope inverseTag( conway::AllocSite::NurbsInverse );
+          pInv = bSplineInverseEvaluation( pt );
+        }
 
         points.push_back({pInv.x, pInv.y});
         mesh.makeVertex( { pt, pInv } );
@@ -1279,7 +1301,11 @@ inline void TriangulateBspline(Geometry &geometry,
     // r indicates the level of subdivision, currently 3 you can increase it to
     // 5
 
-    std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+    std::vector<uint32_t> indices;
+  {
+    conway::AllocTagScope earcutTag( conway::AllocSite::Earcut );
+    indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  }
 
     for ( size_t i = 0; i < indices.size(); i += 3 ) {
 

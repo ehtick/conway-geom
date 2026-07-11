@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 
 #include "structures/winged_edge.h"
+#include "structures/alloc_telemetry.h"
 #include <atomic>
 #include <queue>
 #include "representation/Geometry.h"
@@ -287,6 +288,7 @@ namespace conway::geometry
 
     try
     {
+      conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
       triangulation.insertVertices( cdtVertices );
       triangulation.insertEdges( cdtEdges );
 
@@ -547,7 +549,8 @@ namespace conway::geometry
       EquatorSideFunction equatorSide,
       DiscardEdgeFunction discardEdge)
   {
-    std::vector< glm::dvec2 > &parameterizationVertices = outputMesh.vertices;
+    // auto&: WingedEdgeMesh::vertices is a std::pmr::vector (AFTP arena-backing).
+    auto &parameterizationVertices = outputMesh.vertices;
 
     size_t vertexCount = boundaryMesh.normalFormVertices.size();
 
@@ -696,6 +699,7 @@ namespace conway::geometry
 
     try
     {
+      conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
       triangulation.insertVertices( cdtVertices );
       triangulation.insertEdges( cdtEdges );
 
@@ -804,7 +808,7 @@ namespace conway::geometry
     LoopEdgeMesh boundaryMesh;
 
     VertexMap               &vertexMap          = boundaryMesh.vertexMap;
-    std::vector<glm::dvec3> &vertices           = output.vertices;
+    auto &vertices           = output.vertices;  // pmr::vector (AFTP)
     std::vector<glm::dvec3> &normalFormVertices = boundaryMesh.normalFormVertices;
     std::vector< LoopEdge > &loopEdges          = boundaryMesh.loopEdges;
 
@@ -902,7 +906,7 @@ namespace conway::geometry
     vertexRemapping.reserve( vertexCount );
     cdtVertices.reserve( vertexCount );
 
-    std::vector<glm::dvec2> &parameterization1Vertices = side0.vertices;
+    auto &parameterization1Vertices = side0.vertices;  // pmr::vector (AFTP)
 
     for ( const Triangle &triangle : side0.triangles )
     {
@@ -1058,6 +1062,7 @@ namespace conway::geometry
 
       try
       {
+        conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
         triangulation.insertVertices( cdtVertices );
         triangulation.insertEdges( cdtEdges );
         triangulation.eraseOuterTriangles();
