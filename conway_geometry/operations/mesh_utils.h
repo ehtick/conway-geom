@@ -596,7 +596,11 @@ inline void TriangulateConicalSurface(
   // r indicates the level of subdivision, currently 3 you can increase it to
   // 5
 
-  std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  std::vector<uint32_t> indices;
+  {
+    conway::AllocTagScope earcutTag( conway::AllocSite::Earcut );
+    indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  }
 
   for (size_t i = 0; i < indices.size(); i += 3) {
 
@@ -795,7 +799,11 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
 #endif
 
-  std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  std::vector<uint32_t> indices;
+  {
+    conway::AllocTagScope earcutTag( conway::AllocSite::Earcut );
+    indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  }
 
   for (size_t i = 0; i < indices.size(); i += 3) {
 
@@ -1273,7 +1281,11 @@ inline void TriangulateBspline(Geometry &geometry,
         pt.y *= scaling;
         pt.z *= scaling;
 
-        glm::dvec2 pInv = bSplineInverseEvaluation( pt );
+        glm::dvec2 pInv;
+        {
+          conway::AllocTagScope inverseTag( conway::AllocSite::NurbsInverse );
+          pInv = bSplineInverseEvaluation( pt );
+        }
 
         points.push_back({pInv.x, pInv.y});
         mesh.makeVertex( { pt, pInv } );
@@ -1289,7 +1301,11 @@ inline void TriangulateBspline(Geometry &geometry,
     // r indicates the level of subdivision, currently 3 you can increase it to
     // 5
 
-    std::vector<uint32_t> indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+    std::vector<uint32_t> indices;
+  {
+    conway::AllocTagScope earcutTag( conway::AllocSite::Earcut );
+    indices = mapbox::earcut<uint32_t>(uvBoundaryValues);
+  }
 
     for ( size_t i = 0; i < indices.size(); i += 3 ) {
 

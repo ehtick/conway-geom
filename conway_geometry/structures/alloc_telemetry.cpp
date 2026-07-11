@@ -32,6 +32,13 @@ struct ThreadFaceStats {
 
 thread_local ThreadFaceStats tls;
 
+// Active allocation-attribution site for this thread (see AllocTagScope).
+thread_local conway::AllocSite g_currentSite = conway::AllocSite::Other;
+
+// Per-site in-scope allocation counts (process-wide).
+std::atomic<uint64_t>
+    g_siteCounts[static_cast<int>(conway::AllocSite::Count)] = {};
+
 inline void onAlloc(void* ptr) {
   if (!tls.active || ptr == nullptr) {
     return;
@@ -41,6 +48,8 @@ inline void onAlloc(void* ptr) {
   if (tls.liveBytes > tls.peakBytes) {
     tls.peakBytes = tls.liveBytes;
   }
+  g_siteCounts[static_cast<int>(g_currentSite)].fetch_add(
+      1, std::memory_order_relaxed);
 }
 
 inline void onFree(void* ptr) {
@@ -169,6 +178,24 @@ void DumpAllocTelemetry(const char* label) {
           "[alloc-telemetry]   escapedBytes(avg=%" PRIu64 " max=%" PRIu64
           ") -- allocations outliving the face (mesh commits)\n",
           g_totalEscapedBytes.load() / faces, g_maxEscapedBytes.load());
+  // Per-callsite attribution of the in-scope allocations (AllocTagScope).
+  static const char* const kSiteNames[] = {
+      "other",         "earcut",       "cdt",         "surface_eval",
+      "nurbs_inverse", "tri_bounds",   "tri_bspline", "tri_cylinder",
+      "tri_sphere",    "tri_toroidal", "tri_conical", "tri_revolution",
+      "tri_extrusion"};
+  for (int i = 0; i < static_cast<int>(AllocSite::Count); ++i) {
+    uint64_t count = g_siteCounts[i].load();
+    if (count == 0) {
+      continue;
+    }
+    fprintf(stderr,
+            "[alloc-telemetry]   site %-13s: %12" PRIu64 " (%5.1f%%, %.1f/face)\n",
+            kSiteNames[i], count,
+            100.0 * static_cast<double>(count) /
+                static_cast<double>(g_totalAllocCalls.load()),
+            static_cast<double>(count) / static_cast<double>(faces));
+  }
   // Cumulative histogram: what fraction of faces fit an arena of 2^(i+1)?
   uint64_t running = 0;
   for (int i = 0; i < kBuckets; ++i) {
@@ -185,6 +212,12 @@ void DumpAllocTelemetry(const char* label) {
   }
 }
 
+AllocTagScope::AllocTagScope(AllocSite site) : previous_(g_currentSite) {
+  g_currentSite = site;
+}
+
+AllocTagScope::~AllocTagScope() { g_currentSite = previous_; }
+
 void ResetAllocTelemetry() {
   g_faces.store(0);
   g_totalAllocCalls.store(0);
@@ -195,6 +228,9 @@ void ResetAllocTelemetry() {
   g_maxEscapedBytes.store(0);
   for (int i = 0; i < kBuckets; ++i) {
     g_peakHistogram[i].store(0);
+  }
+  for (int i = 0; i < static_cast<int>(AllocSite::Count); ++i) {
+    g_siteCounts[i].store(0);
   }
 }
 

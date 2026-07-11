@@ -43,6 +43,40 @@ class AllocTelemetryScope {
   bool outermost_ = false;
 };
 
+/** Coarse callsite buckets for attributing where in-scope allocations happen.
+ *  Extend as needed; keep Count last. */
+enum class AllocSite {
+  Other = 0,
+  Earcut,
+  Cdt,
+  SurfaceEval,
+  NurbsInverse,
+  TriBounds,
+  TriBspline,
+  TriCylinder,
+  TriSphere,
+  TriToroidal,
+  TriConical,
+  TriRevolution,
+  TriExtrusion,
+  Count
+};
+
+/** RAII: set the active allocation-attribution site for the current thread,
+ *  restoring the previous one on exit (nests). Allocations made while active
+ *  are counted against this site in the telemetry breakdown. */
+class AllocTagScope {
+ public:
+  explicit AllocTagScope(AllocSite site);
+  ~AllocTagScope();
+
+  AllocTagScope(const AllocTagScope&) = delete;
+  AllocTagScope& operator=(const AllocTagScope&) = delete;
+
+ private:
+  AllocSite previous_;
+};
+
 /** Print the aggregate histogram/summary to stderr (typically once per model,
  *  from the processor destructor or an explicit binding). */
 void DumpAllocTelemetry(const char* label);
@@ -55,6 +89,28 @@ void ResetAllocTelemetry();
 class AllocTelemetryScope {
  public:
   AllocTelemetryScope() {}
+};
+
+enum class AllocSite {
+  Other = 0,
+  Earcut,
+  Cdt,
+  SurfaceEval,
+  NurbsInverse,
+  TriBounds,
+  TriBspline,
+  TriCylinder,
+  TriSphere,
+  TriToroidal,
+  TriConical,
+  TriRevolution,
+  TriExtrusion,
+  Count
+};
+
+class AllocTagScope {
+ public:
+  explicit AllocTagScope(AllocSite) {}
 };
 
 inline void DumpAllocTelemetry(const char*) {}

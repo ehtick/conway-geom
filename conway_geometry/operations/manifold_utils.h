@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 
 #include "structures/winged_edge.h"
+#include "structures/alloc_telemetry.h"
 #include <atomic>
 #include <queue>
 #include "representation/Geometry.h"
@@ -287,6 +288,7 @@ namespace conway::geometry
 
     try
     {
+      conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
       triangulation.insertVertices( cdtVertices );
       triangulation.insertEdges( cdtEdges );
 
@@ -697,6 +699,7 @@ namespace conway::geometry
 
     try
     {
+      conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
       triangulation.insertVertices( cdtVertices );
       triangulation.insertEdges( cdtEdges );
 
@@ -1059,6 +1062,7 @@ namespace conway::geometry
 
       try
       {
+        conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
         triangulation.insertVertices( cdtVertices );
         triangulation.insertEdges( cdtEdges );
         triangulation.eraseOuterTriangles();

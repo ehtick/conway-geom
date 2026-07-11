@@ -5,6 +5,7 @@
 
 #include "structures/winged_edge.h"
 #include "structures/scratch_arena.h"
+#include "structures/alloc_telemetry.h"
 #include <memory_resource>
 #include <queue>
 #include "representation/Geometry.h"
@@ -232,6 +233,7 @@ namespace conway::geometry {
 
       glm::dvec3 averagePoint = ( v0.point + v1.point ) * 0.5;
       glm::dvec2 newUV        = ( v0.uv + v1.uv ) * 0.5;
+      conway::AllocTagScope surfaceTag( conway::AllocSite::SurfaceEval );
       glm::dvec3 newPoint     = surface( averagePoint, newUV );
 
       glm::dvec3 deltaNewPoint = newPoint - averagePoint;

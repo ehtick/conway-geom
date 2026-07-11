@@ -56,20 +56,31 @@ void testReset() {
   check(first == second, "reset rewinds to the same base");
 }
 
-// Oversized requests spill to the heap, are counted, and freed at reset().
-void testSpill() {
+// Overflowing the base chunk grows a new chunk (not a per-allocation spill):
+// storage is usable, growth is counted, and — crucially — a face that vastly
+// overflows the base costs O(log) growths, not one heap alloc per request.
+void testGrowth() {
   conway::ScratchArena arena(256);
-  void* big = arena.allocate(4096, 16);  // exceeds capacity -> spill
-  check(big != nullptr, "spill returns usable storage");
-  check(arena.spillCount() == 1, "one spill counted");
-  check(arena.spillBytes() >= 4096, "spill bytes counted");
-  // Exhaust-then-spill: fill the buffer, next small alloc also spills.
-  conway::ScratchArena tight(64);
-  (void)tight.allocate(64, 1);
-  (void)tight.allocate(1, 1);
-  check(tight.spillCount() == 1, "spill when arena exhausted");
+  void* big = arena.allocate(4096, 16);  // exceeds base -> one growth
+  check(big != nullptr, "growth returns usable storage");
+  check(arena.spillCount() == 1, "one growth counted");
+  check(arena.spillBytes() >= 4096, "growth bytes counted");
+
+  // The spill-storm regression: a small base with thousands of small allocs
+  // must NOT do one heap allocation per request. Geometric growth bounds it to
+  // a logarithmic number of chunks.
+  conway::ScratchArena storm(64);
+  for (int i = 0; i < 100000; ++i) {
+    (void)storm.allocate(16, 8);
+  }
+  check(storm.spillCount() < 40,
+        "100k allocations grow O(log) chunks, not per-alloc");
+
   arena.reset();
-  check(arena.spillCount() == 1, "reset does not zero lifetime spill count");
+  check(arena.spillCount() == 1, "reset does not zero lifetime growth count");
+  // After reset the base chunk is reused: same base pointer as a fresh alloc.
+  void* reused = arena.allocate(16, 16);
+  check(reused != nullptr, "reset leaves the arena usable");
 }
 
 // The STL allocator adapter routes a std::vector through a given arena.
@@ -127,18 +138,22 @@ void testNesting() {
   check(reused == innerFirst, "inner scope freed only its own region");
 }
 
-// Marker/rewind restores spill bookkeeping too: spills taken after a mark are
-// freed on rewind, but the lifetime spill count is not rolled back.
-void testMarkerSpill() {
-  conway::ScratchArena arena(64);
+// Marker/rewind across a growth: a chunk grown after the mark becomes reusable
+// free space on rewind (bump position restored), while the lifetime growth
+// count is not rolled back.
+void testMarkerGrowth() {
+  // Retain generously so the grown chunk is kept for reuse after rewind.
+  conway::ScratchArena arena(64, 1u << 20);
   auto m = arena.mark();
-  (void)arena.allocate(4096, 16);  // spill after the mark
-  check(arena.spillCount() == 1, "spill counted");
+  void* first = arena.allocate(4096, 16);  // grows a chunk after the mark
+  check(arena.spillCount() == 1, "growth counted");
   arena.rewind(m);
-  check(arena.spillCount() == 1, "rewind keeps lifetime spill count");
-  // A fresh spill after rewind reuses the freed slot bookkeeping cleanly.
-  (void)arena.allocate(4096, 16);
-  check(arena.spillCount() == 2, "post-rewind spill counted");
+  check(arena.spillCount() == 1, "rewind keeps lifetime growth count");
+  // The same request after rewind reuses the retained grown chunk (no new
+  // growth) and hands back the same region.
+  void* second = arena.allocate(4096, 16);
+  check(arena.spillCount() == 1, "post-rewind alloc reuses the grown chunk");
+  check(first == second, "rewind reused the grown chunk's region");
 }
 
 // The pmr resource routes std::pmr containers (vector + unordered_map, the
@@ -173,11 +188,11 @@ void testPmrResource() {
 int main() {
   testBumpAndAlignment();
   testReset();
-  testSpill();
+  testGrowth();
   testAllocatorAdapter();
   testScope();
   testNesting();
-  testMarkerSpill();
+  testMarkerGrowth();
   testPmrResource();
 
   if (g_failures == 0) {

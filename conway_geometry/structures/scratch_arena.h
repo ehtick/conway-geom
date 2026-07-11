@@ -30,39 +30,60 @@
 
 namespace conway {
 
-// Default per-thread arena capacity. Sized from the telemetry: ≥99.9% of
-// Arty_Z7 faces and ~98% of the NURBS-dense jet engine peak under ~1–2 MiB of
-// live scratch, and a bump allocator (no per-allocation free) consumes the
-// *cumulative* not peak size within a face, so we give generous headroom.
-// Per-thread × a handful of workers, so a few MiB each is cheap.
+// Default per-thread arena capacity (size of the base chunk). Sized from the
+// telemetry: ≥99.9% of Arty_Z7 faces and ~98% of the NURBS-dense jet engine
+// peak under ~1–2 MiB of live scratch, and a bump allocator (no per-allocation
+// free) consumes the *cumulative* not peak size within a face, so we give
+// generous headroom. Per-thread × a handful of workers, so a few MiB each is
+// cheap.
 constexpr std::size_t kDefaultScratchCapacity = 8u * 1024u * 1024u;
 
+// Total backing bytes retained across rewind()/reset() for reuse. The base
+// chunk is always kept; grown chunks are kept only while the total stays under
+// this cap, then released back to the heap. This keeps steady-state faces
+// malloc-free (they fit the base chunk) while a rare oversized face's huge
+// transient chunk does not permanently inflate per-thread RSS.
+constexpr std::size_t kDefaultRetainedCapacity = 32u * 1024u * 1024u;
+
 /**
- * A single-threaded bump allocator with a heap-spill slow path.
+ * A single-threaded bump allocator that GROWS in chunks instead of spilling.
  *
- * allocate() returns aligned storage from the fixed backing buffer; when a
- * request doesn't fit, it spills to the heap and records the event. reset()
- * rewinds the bump offset for reuse and frees every spilled block. Individual
- * deallocations are no-ops — memory is reclaimed wholesale at reset(), which
- * is the per-face boundary.
+ * allocate() returns aligned storage by bumping within the current chunk; when
+ * a request doesn't fit, it advances to the next already-grown chunk or, if
+ * none is large enough, appends a fresh geometrically-larger chunk (one heap
+ * allocation) and bumps within that. This is the key difference from a
+ * fixed-buffer arena: a face whose cumulative scratch far exceeds the base
+ * chunk costs O(log size) heap allocations for growth, not one per allocation.
+ *
+ * Individual deallocations are no-ops. reset()/rewind() rewind the bump
+ * position for reuse; grown chunks are retained (up to kDefaultRetainedCapacity)
+ * so the next face reuses them without touching the heap, and the excess is
+ * released so an oversized face doesn't pin memory.
  */
 class ScratchArena {
  public:
-  explicit ScratchArena(std::size_t capacity = kDefaultScratchCapacity)
+  explicit ScratchArena(std::size_t capacity = kDefaultScratchCapacity,
+                         std::size_t retainedCapacity = kDefaultRetainedCapacity)
       : capacity_(capacity),
-        buffer_(static_cast<std::uint8_t*>(::operator new(capacity))) {}
+        retainedCapacity_(retainedCapacity < capacity ? capacity
+                                                       : retainedCapacity) {
+    chunks_.push_back(
+        Chunk{static_cast<std::uint8_t*>(::operator new(capacity)), capacity});
+  }
 
   ~ScratchArena() {
-    freeSpills();
-    ::operator delete(buffer_);
+    for (const Chunk& c : chunks_) {
+      ::operator delete(c.ptr);
+    }
   }
 
   ScratchArena(const ScratchArena&) = delete;
   ScratchArena& operator=(const ScratchArena&) = delete;
 
   /**
-   * Return `bytes` of storage aligned to `align` (a power of two). Draws from
-   * the bump buffer when it fits, otherwise spills to the heap.
+   * Return `bytes` of storage aligned to `align` (a power of two), bumping
+   * within the current chunk and growing (or advancing to a retained chunk)
+   * when it doesn't fit.
    *
    * @param bytes Number of bytes requested.
    * @param align Required alignment (power of two).
@@ -74,26 +95,36 @@ class ScratchArena {
     if (bytes == 0) {
       bytes = 1;
     }
-    // Align the absolute address, not the offset: operator new only guarantees
-    // max_align_t on the buffer base, so an over-aligned request (align >
-    // buffer alignment) must be satisfied against the real pointer.
-    const std::uintptr_t bufAddr = reinterpret_cast<std::uintptr_t>(buffer_);
-    const std::uintptr_t aligned = (bufAddr + offset_ + (align - 1)) & ~(align - 1);
-    const std::size_t base = static_cast<std::size_t>(aligned - bufAddr);
-    if (base <= capacity_ && bytes <= capacity_ - base) {
-      offset_ = base + bytes;
-      if (offset_ > highWater_) {
-        highWater_ = offset_;
-      }
-      return buffer_ + base;
+    // Fast path: fits the current chunk.
+    void* p = tryBump(chunks_[current_], bytes, align);
+    if (p != nullptr) {
+      return p;
     }
-    // Spill path: oversized (or arena-exhausted) request goes to the heap and
-    // lives until reset(). Counted so the wiring step can quantify the tail.
-    void* p = ::operator new(bytes);
-    spills_.push_back(p);
-    ++spillCount_;
-    spillBytes_ += bytes;
-    return p;
+    // The current chunk is full — its used portion becomes committed scratch.
+    committedLower_ += offset_;
+    // Advance through any already-grown chunks that can satisfy the request.
+    while (current_ + 1 < chunks_.size()) {
+      ++current_;
+      offset_ = 0;
+      p = tryBump(chunks_[current_], bytes, align);
+      if (p != nullptr) {
+        return p;
+      }
+      // This retained chunk is too small for the request; leave it unused and
+      // keep advancing (its 0 used bytes add nothing to the committed total).
+    }
+    // No retained chunk fits — grow. Geometric: at least the current total
+    // backing, so cumulative capacity doubles and chunk count stays O(log n).
+    std::size_t grow = totalBacking();
+    std::size_t newSize = bytes + align > grow ? bytes + align : grow;
+    chunks_.push_back(
+        Chunk{static_cast<std::uint8_t*>(::operator new(newSize)), newSize});
+    current_ = chunks_.size() - 1;
+    offset_ = 0;
+    ++growthCount_;
+    growthBytes_ += newSize;
+    p = tryBump(chunks_[current_], bytes, align);
+    return p;  // fits by construction (newSize >= bytes + align)
   }
 
   /**
@@ -103,59 +134,106 @@ class ScratchArena {
    * reset-to-zero cannot do safely when tessellation helpers call each other.
    */
   struct Marker {
+    std::size_t chunk;
     std::size_t offset;
-    std::size_t liveSpills;
+    std::size_t committedLower;
   };
 
   /** Capture the current position for a later rewind(). */
-  Marker mark() const { return Marker{offset_, spills_.size()}; }
+  Marker mark() const { return Marker{current_, offset_, committedLower_}; }
 
   /**
-   * Restore to a previously marked position: rewind the bump offset and free
-   * only the spills allocated after the mark. Lifetime spill stats are left
-   * intact (they measure the whole run).
+   * Restore to a previously marked position: rewind the bump position to the
+   * marked chunk/offset. Chunks grown after the mark become reusable free
+   * space; the excess beyond the retention cap is released to the heap.
+   * Lifetime growth stats are left intact (they measure the whole run).
    */
   void rewind(Marker m) {
-    for (std::size_t i = m.liveSpills; i < spills_.size(); ++i) {
-      ::operator delete(spills_[i]);
-    }
-    spills_.resize(m.liveSpills);
+    current_ = m.chunk;
     offset_ = m.offset;
+    committedLower_ = m.committedLower;
+    trimToRetentionCap();
   }
 
-  /** Rewind to the base and release all spilled blocks. */
+  /** Rewind to the base chunk and drop retained growth beyond the cap. */
   void reset() {
+    current_ = 0;
     offset_ = 0;
-    freeSpills();
+    committedLower_ = 0;
+    trimToRetentionCap();
   }
 
-  /** Peak bump-buffer bytes used since construction (excludes spills). */
+  /** Peak cumulative bump bytes handed out within a face since construction. */
   std::size_t highWater() const { return highWater_; }
 
-  /** Total heap spills since construction. */
-  std::uint64_t spillCount() const { return spillCount_; }
+  /** Number of heap chunks grown (beyond the base) since construction. */
+  std::uint64_t spillCount() const { return growthCount_; }
 
-  /** Total bytes that went through the spill path since construction. */
-  std::uint64_t spillBytes() const { return spillBytes_; }
+  /** Total bytes of grown chunks since construction. */
+  std::uint64_t spillBytes() const { return growthBytes_; }
 
-  /** Backing-buffer capacity in bytes. */
+  /** Base-chunk capacity in bytes. */
   std::size_t capacity() const { return capacity_; }
 
+  /** Total backing bytes currently held (base + retained grown chunks). */
+  std::size_t totalCapacity() const { return totalBacking(); }
+
  private:
-  void freeSpills() {
-    for (void* p : spills_) {
-      ::operator delete(p);
+  struct Chunk {
+    std::uint8_t* ptr;
+    std::size_t size;
+  };
+
+  // Try to bump `bytes` (aligned) within `c` starting at offset_. Returns the
+  // pointer and advances offset_ on success, or nullptr if it doesn't fit.
+  void* tryBump(const Chunk& c, std::size_t bytes, std::size_t align) {
+    // Align the absolute address, not the offset: operator new only guarantees
+    // max_align_t on the chunk base, so an over-aligned request (align > chunk
+    // base alignment) must be satisfied against the real pointer.
+    const std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(c.ptr);
+    const std::uintptr_t aligned =
+        (addr + offset_ + (align - 1)) & ~(align - 1);
+    const std::size_t base = static_cast<std::size_t>(aligned - addr);
+    if (base <= c.size && bytes <= c.size - base) {
+      offset_ = base + bytes;
+      const std::size_t live = committedLower_ + offset_;
+      if (live > highWater_) {
+        highWater_ = live;
+      }
+      return c.ptr + base;
     }
-    spills_.clear();
+    return nullptr;
+  }
+
+  std::size_t totalBacking() const {
+    std::size_t total = 0;
+    for (const Chunk& c : chunks_) {
+      total += c.size;
+    }
+    return total;
+  }
+
+  // Release trailing grown chunks (never the base, never a chunk at/below the
+  // current position) while the retained backing exceeds the cap.
+  void trimToRetentionCap() {
+    std::size_t total = totalBacking();
+    while (chunks_.size() > current_ + 1 && chunks_.size() > 1 &&
+           total > retainedCapacity_) {
+      total -= chunks_.back().size;
+      ::operator delete(chunks_.back().ptr);
+      chunks_.pop_back();
+    }
   }
 
   std::size_t capacity_;
-  std::uint8_t* buffer_;
-  std::size_t offset_ = 0;
+  std::size_t retainedCapacity_;
+  std::vector<Chunk> chunks_;
+  std::size_t current_ = 0;         // index of the chunk we bump within
+  std::size_t offset_ = 0;          // bump offset within chunks_[current_]
+  std::size_t committedLower_ = 0;  // used bytes in chunks below current_
   std::size_t highWater_ = 0;
-  std::vector<void*> spills_;
-  std::uint64_t spillCount_ = 0;
-  std::uint64_t spillBytes_ = 0;
+  std::uint64_t growthCount_ = 0;
+  std::uint64_t growthBytes_ = 0;
 };
 
 /**
