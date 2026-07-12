@@ -195,7 +195,7 @@ project "conway_geom_native"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -sGROWABLE_ARRAYBUFFERS=0 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
         }
 
     configuration {}
@@ -359,7 +359,7 @@ project "conway_geom_native_tests"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -sSTACK_SIZE=5MB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native_tests -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -sGROWABLE_ARRAYBUFFERS=0 -s MAXIMUM_MEMORY=4GB -sSTACK_SIZE=5MB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=conway_geom_native_tests -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
         }
 
     configuration {}
@@ -523,7 +523,7 @@ project "webifc_native"
             "--bind",
             "-03",
             "-flto",
-            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=webifc_native -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
+            '--define-macro=REAL_T_IS_DOUBLE -s ALLOW_MEMORY_GROWTH=1 -sGROWABLE_ARRAYBUFFERS=0 -s MAXIMUM_MEMORY=4GB -s FORCE_FILESYSTEM=1 -s EXPORT_NAME=webifc_native -s MODULARIZE=1 ' .. exportedRuntimeMethods .. ' -lworkerfs.js'
         }
 
     configuration {}
@@ -661,6 +661,7 @@ project "webifc_native"
             "--define-macro=REAL_T_IS_DOUBLE",
             "-s ENVIRONMENT=node,worker",
             "-s ALLOW_MEMORY_GROWTH=1",
+            "-sGROWABLE_ARRAYBUFFERS=0",
             "-s MAXIMUM_MEMORY=4GB",
             "-s STACK_SIZE=10MB",
             "-s FORCE_FILESYSTEM=1",
@@ -691,6 +692,7 @@ project "webifc_native"
             "-flto",
             "--define-macro=REAL_T_IS_DOUBLE",
             "-s ALLOW_MEMORY_GROWTH=1",
+            "-sGROWABLE_ARRAYBUFFERS=0",
             "-s MAXIMUM_MEMORY=4GB",
             "-s STACK_SIZE=5MB",
             "-s FORCE_FILESYSTEM=1",
@@ -892,6 +894,7 @@ linkoptions {
     -- emscripten >= 6 needs the worker environment here, like the non-MT targets.
     "-s ENVIRONMENT=node,worker",
     "-s ALLOW_MEMORY_GROWTH=1",
+    "-sGROWABLE_ARRAYBUFFERS=0",
     "-s MAXIMUM_MEMORY=4GB",
     "-s STACK_SIZE=10MB",
     "-s FORCE_FILESYSTEM=1",
@@ -929,6 +932,7 @@ linkoptions {
     "-sPTHREAD_POOL_SIZE=\"" .. nodeCores .. "\"",
     "--define-macro=REAL_T_IS_DOUBLE",
     "-s ALLOW_MEMORY_GROWTH=1",
+    "-sGROWABLE_ARRAYBUFFERS=0",
     "-s MAXIMUM_MEMORY=4GB",
     "-s STACK_SIZE=5MB",
     "-s FORCE_FILESYSTEM=1",
@@ -1140,6 +1144,7 @@ if _ARGS[1] == "profile" and _ARGS[2] ~= nil then
         "-s PRECISE_F32=1",
         "-s ENVIRONMENT=web,worker",
         "-s ALLOW_MEMORY_GROWTH=1",
+        "-sGROWABLE_ARRAYBUFFERS=0",
         "-s MAXIMUM_MEMORY=4GB",
         "-s STACK_SIZE=5MB",
         "-s FORCE_FILESYSTEM=1",
@@ -1170,6 +1175,7 @@ else
         "--define-macro=REAL_T_IS_DOUBLE",
         "-s PRECISE_F32=1",
         "-s ALLOW_MEMORY_GROWTH=1",
+        "-sGROWABLE_ARRAYBUFFERS=0",
         "-s MAXIMUM_MEMORY=4GB",
         "-s STACK_SIZE=5MB",
         "-s FORCE_FILESYSTEM=1",
@@ -1365,6 +1371,7 @@ linkoptions {
     "--define-macro=REAL_T_IS_DOUBLE",
     "-sENVIRONMENT=web,worker",
     "-s ALLOW_MEMORY_GROWTH=1",
+    "-sGROWABLE_ARRAYBUFFERS=0",
     "-s MAXIMUM_MEMORY=4GB",
     "-s STACK_SIZE=5MB",
     "-s FORCE_FILESYSTEM=1",
@@ -1399,6 +1406,7 @@ linkoptions {
     "-sPTHREAD_POOL_SIZE=\"" .. webCores .. "\"",
     "--define-macro=REAL_T_IS_DOUBLE",
     "-s ALLOW_MEMORY_GROWTH=1",
+    "-sGROWABLE_ARRAYBUFFERS=0",
     "-s MAXIMUM_MEMORY=4GB",
     "-s STACK_SIZE=5MB",
     "-s FORCE_FILESYSTEM=1",
