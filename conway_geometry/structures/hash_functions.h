@@ -32,7 +32,7 @@ namespace std {
   template <>
   struct hash< std::pair< uint32_t, uint32_t > > {
 
-    size_t operator()( const std::pair< uint32_t, uint32_t >& value ) const {
+    size_t operator()( const std::pair< uint32_t, uint32_t >& value ) const noexcept {
 
       return conway::hash_mix( conway::hash( value.first ), conway::hash( value.second ) );
     }
@@ -41,7 +41,7 @@ namespace std {
   template <>
   struct hash< glm::dvec3 > {
 
-    size_t operator()( const glm::dvec3& value ) const {
+    size_t operator()( const glm::dvec3& value ) const noexcept {
 
       std::hash< double > doubleHasher;
 
@@ -52,7 +52,7 @@ namespace std {
   template <>
   struct hash< glm::dvec2 > {
 
-    size_t operator()( const glm::dvec2& value ) const {
+    size_t operator()( const glm::dvec2& value ) const noexcept {
 
       std::hash< double > doubleHasher;
 
