@@ -13,6 +13,7 @@ namespace conway::geometry {
 
     UnionFind< uint32_t >                         unified;
     std::unordered_multimap< uint32_t, uint32_t > spatial_hash;
+    std::unordered_map< glm::dvec3, uint32_t >    exact_hash;
     std::vector< uint32_t >                       remap;
     std::vector< Triangle >                       old_triangles;
     std::vector< glm::dvec3 >                     converged;
@@ -25,6 +26,7 @@ namespace conway::geometry {
 
       unified.reset();
       spatial_hash.clear();
+      exact_hash.clear();
       remap.resize( toWeld.vertices.size() );
       old_triangles.clear();
       spatial_hash.clear();
@@ -53,6 +55,7 @@ namespace conway::geometry {
 
       unified.allocate( verticesSize );
       converged.reserve( verticesSize );
+      exact_hash.reserve( verticesSize );
 
       for (
         uint32_t where = 0;
@@ -62,6 +65,36 @@ namespace conway::geometry {
         glm::dvec3& vertex = vertices[ where ];
 
         converged.push_back( vertex );
+
+        // Bit-exact duplicate fast path. At the weld tolerance ( DBL_EPSILON )
+        // same_point() is satisfied only by bitwise-identical coordinates for
+        // any vertex of magnitude above ~1 ( one ULP there already exceeds the
+        // tolerance ), so degenerate geometry that collapses many faces onto a
+        // single point yields many bitwise-identical vertices in one Morton
+        // cell. The spatial probe below then costs O( cluster^2 ) same_point()
+        // calls — 215 s on Jetenginestep's shaft. A bitwise-identical vertex is
+        // interchangeable under same_point(), so it can merge straight into the
+        // first occurrence's set and skip both the spatial probe and the hash
+        // insert: any later vertex within tolerance still matches the retained
+        // representative, so the union-find partition is unchanged. Roots are
+        // order-independent ( merge() unions by minimum index ), so the
+        // byte-for-byte weld output is identical.
+        auto [ exactIt, exactInserted ] = exact_hash.try_emplace( vertex, where );
+
+        if ( !exactInserted ) {
+
+          uint32_t foundRep  = unified.find( exactIt->second );
+          uint32_t foundThis = unified.find( where );
+
+          if ( foundRep != foundThis ) {
+
+            uint32_t mergeIndex = unified.merge( foundRep, foundThis );
+
+            converged[ mergeIndex ] = vertices[ mergeIndex ];
+          }
+
+          continue;
+        }
 
         glm::uvec3 coord = unpacked_coord3( vertex, boundingBox.min, inverseStep );
 
