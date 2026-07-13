@@ -1895,7 +1895,19 @@ Geometry ConwayGeometryProcessor::getPolygonalFaceSetGeometry(
 
     bounds = ReadIndexedPolygonalFace(params);
 
-    TriangulateBounds(geom, bounds);
+    // Unlike the staged AddFaceToGeometry path (whose FinalizeStagedFaces
+    // wraps every face in a per-face try/catch), this unstaged loop calls
+    // TriangulateBounds directly. Guard it so a single degenerate face — e.g.
+    // the non-finite planar-projection case the tesselatePlane guard throws on
+    // — is skipped rather than aborting the whole polygonal face set (and
+    // propagating out across the embind boundary). This matches tesselatePlane's
+    // own per-face CDT-error returns; byte-identical on any face that already
+    // triangulates.
+    try {
+      TriangulateBounds(geom, bounds);
+    } catch (const std::exception& e) {
+      Logger::logError("Skipping polygonal face in face set: %s", e.what());
+    }
 
     bounds.clear();
   }
