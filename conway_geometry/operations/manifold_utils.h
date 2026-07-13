@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <stdexcept>
 #include <glm/glm.hpp>
 
 #include "structures/winged_edge.h"
@@ -693,6 +694,27 @@ namespace conway::geometry
       return;
     }
 
+    // Non-finite CDT input guard. A dual-parameterization singularity — a
+    // full-loop toroidal/spherical face whose boundary maps onto the
+    // projection pole, where `normalize(originalPlanar)` divides a
+    // zero-length vector — yields NaN/inf parameter coordinates for every
+    // vertex. CDT chokes on that input, ballooning its triangle store by
+    // hundreds of MiB per face before it aborts, and the whole face is
+    // dropped regardless (it commits no geometry) — on Arty_Z7, 8 such
+    // fillet faces ratcheted the grow-only wasm heap to the 4 GiB ceiling.
+    // Detect it up front and drop the face the same way, without the
+    // transient. Byte-identical: CDT of non-finite input never produced
+    // committed geometry. (Correctly tessellating pole-crossing faces is a
+    // separate, digest-moving change.)
+    for ( const CDT::V2d< double > &v : cdtVertices )
+    {
+      if ( !std::isfinite( v.x ) || !std::isfinite( v.y ) )
+      {
+        throw std::runtime_error(
+          "conway: non-finite dual-parameterization (projection pole); dropping face" );
+      }
+    }
+
     CDT::Triangulation< double > triangulation(
       CDT::VertexInsertionOrder::Auto,
       CDT::IntersectingConstraintEdges::NotAllowed, 0);
@@ -1055,9 +1077,21 @@ namespace conway::geometry
 
     if ( !cdtEdges.empty() )
     {
+      // Same non-finite input guard as tesselateHalfDualParameterization
+      // above — the equator-stitch CDT reads the side-0 parameterization,
+      // which is NaN/inf when the boundary sits on the projection pole.
+      for ( const CDT::V2d< double > &v : cdtVertices )
+      {
+        if ( !std::isfinite( v.x ) || !std::isfinite( v.y ) )
+        {
+          throw std::runtime_error(
+            "conway: non-finite dual-parameterization (projection pole); dropping face" );
+        }
+      }
+
       CDT::Triangulation< double > triangulation(
         CDT::VertexInsertionOrder::AsProvided,
-        CDT::IntersectingConstraintEdges::NotAllowed, 
+        CDT::IntersectingConstraintEdges::NotAllowed,
         0);
 
       try
