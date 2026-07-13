@@ -283,6 +283,22 @@ namespace conway::geometry
       return;
     }
 
+    // Non-finite CDT input guard — same rationale as the dual-parameterization
+    // guards below. Here the planar projection basis can come out NaN when
+    // `GetBasisFromCoplanarPoints` returns nearly-coincident vectors and
+    // `glm::normalize` divides a zero-length difference; every projected
+    // coordinate is then NaN and CDT balloons hundreds of MiB before failing
+    // (measured: supercap2/supercap3 pegged the 4 GiB wasm ceiling from 2 MB
+    // sources through this path). The face is dropped either way.
+    for ( const CDT::V2d< double > &v : cdtVertices )
+    {
+      if ( !std::isfinite( v.x ) || !std::isfinite( v.y ) )
+      {
+        throw std::runtime_error(
+          "conway: non-finite planar projection; dropping face" );
+      }
+    }
+
     CDT::Triangulation< double > triangulation(
       CDT::VertexInsertionOrder::AsProvided,
       CDT::IntersectingConstraintEdges::NotAllowed, 0);
