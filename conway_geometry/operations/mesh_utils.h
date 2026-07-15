@@ -976,16 +976,26 @@ struct RationalNurbsInverseMethod {
 
     }
 
-    min_extent = glm::dvec2( 
-      srf.knots_u.size() < degreeU ? srf.knots_u[ degreeU ] : 0.0,
-      srf.knots_v.size() < degreeV ? srf.knots_v[ degreeV ] : 0.0 );
+    // The valid parameter domain of a clamped NURBS is
+    // [ knots[ degree ], knots[ knotCount - degree - 1 ] ] per axis. These
+    // comparisons were previously inverted (size < degree, which is never
+    // true for a valid knot vector), pinning the domain to [0,1]^2. IFC
+    // exporters normalise knots to 0..1 so it went unnoticed, but STEP
+    // (OCCT) writes real-valued knot ranges (e.g. u in [0, 200] down the
+    // length of a cylinder), and the [0,1] pin collapsed every rational
+    // b-spline face to a sliver - see conway#350 (AS1 rod invisible).
+    min_extent = glm::dvec2(
+      srf.knots_u.size() > degreeU ? srf.knots_u[ degreeU ] : 0.0,
+      srf.knots_v.size() > degreeV ? srf.knots_v[ degreeV ] : 0.0 );
 
+    // Unsigned underflow when knots.size() < degree + 1 makes uM/vM huge,
+    // so the bounds check below also rejects that malformed case.
     size_t uM = srf.knots_u.size() - ( degreeU + 1 );
     size_t vM = srf.knots_v.size() - ( degreeV + 1 );
 
-    max_extent = glm::dvec2( 
-      srf.knots_u.size() < uM ? srf.knots_u[ srf.knots_u.size() - ( degreeU + 1 ) ] : 1.0,
-      srf.knots_v.size() < vM ? srf.knots_v[ srf.knots_v.size() - ( degreeV + 1 ) ] : 1.0 );
+    max_extent = glm::dvec2(
+      uM < srf.knots_u.size() ? srf.knots_u[ uM ] : 1.0,
+      vM < srf.knots_v.size() ? srf.knots_v[ vM ] : 1.0 );
 
 
     for ( size_t i = 0; i < INVERSE_GRID_SIDE; ++i ) {
@@ -1219,8 +1229,13 @@ inline void TriangulateBspline(Geometry &geometry,
 
   std::vector<double> weights;
   weights.reserve( num_u * num_v );
-  // for (std::vector<double> row : surface.BSplineSurface.WeightPoints) {
-  for (const std::vector<double>& row : surface.BSplineSurface.Weights) {
+  // Read WeightPoints, not Weights: WeightPoints is the field the embind
+  // surface parameters (and the IFC GetSurface path) actually populate.
+  // Weights has no writer anywhere, so reading it always fell through to
+  // the all-1.0 default below and rational surfaces (e.g. STEP cylinders
+  // written as weighted Bezier arcs) evaluated as plain polynomials,
+  // bulging the profile - part of conway#350.
+  for (const std::vector<double>& row : surface.BSplineSurface.WeightPoints) {
     for (double weight : row) {
       weights.push_back(weight);
     }

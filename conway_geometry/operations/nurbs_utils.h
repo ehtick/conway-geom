@@ -2,7 +2,9 @@
 
 #include <tinynurbs/tinynurbs.h>
 
+#include <cmath>
 #include <glm/glm.hpp>
+#include <limits>
 #include <tuple>
 #include <vector>
 
@@ -60,18 +62,80 @@ struct RationalSurfaceEvaluator {
     }
   }
 
+  /**
+   * Knot-span lookup (The NURBS Book A2.1). tinynurbs::findSpan guards the
+   * domain ends with an ABSOLUTE epsilon (numeric_limits::epsilon), which is
+   * below one ULP for knot values > 2 - e.g. STEP surfaces whose parameter
+   * range is a real length like [0, 200]. There `lastKnot - epsilon` rounds
+   * back to lastKnot, the guard never fires for u == lastKnot, and its
+   * binary search (`low = mid` with mid pinned by integer division) spins
+   * forever. Exact >= / <= boundary guards make the search invariant
+   * (knots[low] <= u < knots[high]) hold strictly, so it always terminates.
+   */
+  static int findSpan(
+      uint32_t degree,
+      const std::vector< double >& knots,
+      double u ) {
+
+    // Index of the last knot span start (n = knotCount - degree - 2).
+    int n = static_cast< int >( knots.size() ) - static_cast< int >( degree ) - 2;
+
+    if ( u >= knots[ n + 1 ] ) {
+      return n;
+    }
+
+    if ( u <= knots[ degree ] ) {
+      return degree;
+    }
+
+    int low  = degree;
+    int high = n + 1;
+    int mid  = ( low + high ) / 2;
+
+    while ( u < knots[ mid ] || u >= knots[ mid + 1 ] ) {
+
+      if ( u < knots[ mid ] ) {
+        high = mid;
+      } else {
+        low = mid;
+      }
+
+      mid = ( low + high ) / 2;
+    }
+
+    return mid;
+  }
+
+  /**
+   * Clamp a parameter strictly below the last knot so the tinynurbs
+   * fallback (degree > NURBS_MAX_STACK_DEGREE) can never enter
+   * tinynurbs::findSpan's non-terminating end-of-domain case (see
+   * findSpan above).
+   */
+  static double clampBelowLastKnot(
+      uint32_t degree, const std::vector< double >& knots, double u ) {
+
+    double lastKnot = knots[ knots.size() - degree - 1 ];
+
+    return u >= lastKnot ?
+      std::nextafter( lastKnot, -std::numeric_limits< double >::infinity() ) : u;
+  }
+
   /** Point on the surface, matching tinynurbs::surfacePoint( rational ). */
   glm::dvec3 point( double u, double v ) const {
 
     if ( !fastPath_ ) {
-      return tinynurbs::surfacePoint( surface_, u, v );
+      return tinynurbs::surfacePoint(
+        surface_,
+        clampBelowLastKnot( surface_.degree_u, surface_.knots_u, u ),
+        clampBelowLastKnot( surface_.degree_v, surface_.knots_v, v ) );
     }
 
     uint32_t degreeU = surface_.degree_u;
     uint32_t degreeV = surface_.degree_v;
 
-    int spanU = tinynurbs::findSpan( degreeU, surface_.knots_u, u );
-    int spanV = tinynurbs::findSpan( degreeV, surface_.knots_v, v );
+    int spanU = findSpan( degreeU, surface_.knots_u, u );
+    int spanV = findSpan( degreeV, surface_.knots_v, v );
 
     double basisU[ NURBS_MAX_STACK_DEGREE + 1 ];
     double basisV[ NURBS_MAX_STACK_DEGREE + 1 ];
@@ -105,14 +169,17 @@ struct RationalSurfaceEvaluator {
   std::tuple< glm::dvec3, glm::dvec3 > tangent( double u, double v ) const {
 
     if ( !fastPath_ ) {
-      return tinynurbs::surfaceTangent( surface_, u, v );
+      return tinynurbs::surfaceTangent(
+        surface_,
+        clampBelowLastKnot( surface_.degree_u, surface_.knots_u, u ),
+        clampBelowLastKnot( surface_.degree_v, surface_.knots_v, v ) );
     }
 
     uint32_t degreeU = surface_.degree_u;
     uint32_t degreeV = surface_.degree_v;
 
-    int spanU = tinynurbs::findSpan( degreeU, surface_.knots_u, u );
-    int spanV = tinynurbs::findSpan( degreeV, surface_.knots_v, v );
+    int spanU = findSpan( degreeU, surface_.knots_u, u );
+    int spanV = findSpan( degreeV, surface_.knots_v, v );
 
     // ders[ 0 ] = basis values, ders[ 1 ] = first derivatives.
     double dersU[ 2 ][ NURBS_MAX_STACK_DEGREE + 1 ];
