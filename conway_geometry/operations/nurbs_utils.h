@@ -80,6 +80,13 @@ struct RationalSurfaceEvaluator {
     // Index of the last knot span start (n = knotCount - degree - 2).
     int n = static_cast< int >( knots.size() ) - static_cast< int >( degree ) - 2;
 
+    // Degenerate knot vector (fewer than degree + 2 knots) - callers
+    // validate with surfaceIsValid first so this shouldn't happen, but an
+    // out-of-bounds read in wasm is silent garbage, so fail safe.
+    if ( n < 0 ) {
+      return static_cast< int >( degree );
+    }
+
     if ( u >= knots[ n + 1 ] ) {
       return n;
     }
@@ -114,6 +121,10 @@ struct RationalSurfaceEvaluator {
    */
   static double clampBelowLastKnot(
       uint32_t degree, const std::vector< double >& knots, double u ) {
+
+    if ( knots.size() < degree + 1 ) {
+      return u;
+    }
 
     double lastKnot = knots[ knots.size() - degree - 1 ];
 
