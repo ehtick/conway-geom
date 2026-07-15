@@ -2603,10 +2603,24 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getAP214Circle(
         double dxE = glm::dot(vecX, v2);
         double dyE = glm::dot(vecY, v2);
 
+        // Cartesian trims give geometric positions, but the sampling loop
+        // below walks the *parametric* angle t of (x, y) = (r1 cos t, r2 sin t).
+        // The polar angle of a point only matches t when r1 == r2, so for an
+        // ellipse scale each local component by its semi-axis before atan2 —
+        // otherwise an eccentric arc sweeps across the far side of the curve
+        // (bldrs-ai/test-models#45). Circles skip the scaling to stay
+        // bit-identical (the divisions would perturb atan2 by ULPs).
+        if ( radius1 != radius2 && radius1 != 0.0 && radius2 != 0.0 ) {
+          dxS /= radius1;
+          dyS /= radius2;
+          dxE /= radius1;
+          dyE /= radius2;
+        }
+
         startDegrees = 180.0 * atan2( dyS, dxS ) / M_PI;
         endDegrees   = 180.0 * atan2( dyE, dxE ) / M_PI;
 
-        if ( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D == 
+        if ( parameters.paramsGetIfcTrimmedCurve.trim1Cartesian2D ==
              parameters.paramsGetIfcTrimmedCurve.trim2Cartesian2D ) {
           
           if ( parameters.paramsGetIfcTrimmedCurve.senseAgreement ) {
@@ -2639,6 +2653,16 @@ conway::geometry::IfcCurve ConwayGeometryProcessor::getAP214Circle(
         double dxE = glm::dot(vecX, v2);
         double dyE = glm::dot(vecY, v2);
         // double dzE = vecZ.x * v2.x + vecZ.y * v2.y + vecZ.z * v2.z;
+
+        // Same semi-axis scaling as the 2D branch above: convert the trim
+        // points' polar angles to parametric angles so eccentric ellipse
+        // edges keep to their trimmed span (bldrs-ai/test-models#45).
+        if ( radius1 != radius2 && radius1 != 0.0 && radius2 != 0.0 ) {
+          dxS /= radius1;
+          dyS /= radius2;
+          dxE /= radius1;
+          dyE /= radius2;
+        }
 
         startDegrees = ( 180.0 * atan2( dyS, dxS ) / M_PI );
         endDegrees   = ( 180.0 * atan2( dyE, dxE ) / M_PI );
