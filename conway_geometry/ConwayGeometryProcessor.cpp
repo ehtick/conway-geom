@@ -1,5 +1,7 @@
 #include "ConwayGeometryProcessor.h"
 
+#include <cmath>
+
 #include <glm/glm.hpp>
 
 #pragma clang diagnostic push
@@ -1520,8 +1522,13 @@ ConwayGeometryProcessor::GeometryToGltf(
       }
 
       // Accessor min/max properties must be set for vertex position data so
-      // calculate them here
+      // calculate them here. Non-finite values (degenerate upstream geometry)
+      // must be skipped: a NaN here poisons the accessor bounds and makes the
+      // JSON serializer throw mid-manifest, truncating the whole GLB.
       for (size_t i = 0U, j = 0U; i < positionCount; ++i, j = (i % 3U)) {
+        if (!std::isfinite(positions[i])) {
+          continue;
+        }
         minValues[j] = std::min(positions[i], minValues[j]);
         maxValues[j] = std::max(positions[i], maxValues[j]);
       }
@@ -1654,9 +1661,20 @@ ConwayGeometryProcessor::GeometryToGltf(
                               Microsoft::glTF::AppendIdPolicy::GenerateOnEmpty)
                       .id;
 
-    // Construct a Node adding a reference to the Mesh
+    // Construct a Node adding a reference to the Mesh. The vertex data was
+    // rebased onto the first transformed vertex (positionBias) for float32
+    // precision, so that offset must come back as the node translation —
+    // otherwise every chunked GLB is displaced by its own (content-dependent)
+    // first vertex and multi-chunk models no longer assemble.
     Microsoft::glTF::Node node;
     node.meshId = meshId;
+
+    if (hasFirstPoint) {
+      node.translation = Microsoft::glTF::Vector3(
+          static_cast<float>(positionBias.x),
+          static_cast<float>(positionBias.y),
+          static_cast<float>(positionBias.z));
+    }
 
     // Add it to the Document and store the generated ID
     auto nodeId = document.nodes
