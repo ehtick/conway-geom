@@ -339,25 +339,27 @@ inline void TriangulateToroidalSurface(
       // Project the point onto the unit sphere surface
       return ( normalRingCentre * 3.0 ) + normalPointOnRing;
     },
+    // Unwrap the tube cross-section (minor angle phi) to a 2D annulus, radius
+    // 1.5 +/- 0.5 (inner hole 1.0, outer ring 2.0). normalForm packs
+    //   xy = (3 + cos phi) * ringDir(theta),  z = sin phi,
+    // so the tube radius is recoverable from the planar MAGNITUDE:
+    //   radius = 0.5 * |xy| = 1.5 + 0.5*cos phi,   direction = normalize(xy).
+    // Together that is just `xy * 0.5`. The previous form used
+    // `normalize(xy) * (1 + (1 +/- z)*0.5)`, i.e. it drove the radius from z =
+    // sin phi, which is 2-to-1 over each tube half: the inner equator (phi=pi,
+    // xy=(2,0)) and outer equator (phi=0, xy=(4,0)) both collapsed onto radius
+    // 1.5. Those coincident-in-2D-but-distinct-in-3D boundary points made CDT
+    // reject the face (intersecting constraints / duplicate vertex), dropping
+    // toroidal fillet faces - e.g. the jet-engine turbine shaft, test-models
+    // issue #47. cos phi (via |xy|) is monotonic across each hemisphere, so the
+    // unwrap is now injective and the equators land at distinct radii (1 and 2).
     [&]( const glm::dvec3& normalFormVertex ) {
 
-      const double z = ( 1 + normalFormVertex.z );
-
-      glm::dvec2 originalPlanar   = glm::dvec2( normalFormVertex );
-      glm::dvec2 normalRingCentre = glm::normalize( originalPlanar );
-
-      // Range [-2, 2], ring is radiug 1.5 +/- 0.5 (inner hole is 1.0, outer ring is 2)
-      return normalRingCentre * ( 1.0 + z * 0.5 );
+      return glm::dvec2( normalFormVertex ) * 0.5;
     },
     [&]( const glm::dvec3& normalFormVertex ) {
 
-      const double z = ( 1 - normalFormVertex.z );
-
-      glm::dvec2 originalPlanar   = glm::dvec2( normalFormVertex );
-      glm::dvec2 normalRingCentre = glm::normalize( originalPlanar );
-
-      // Range [-2, 2], ring is radiug 1.5 +/- 0.5 (inner hole is 1.0, outer ring is 2)
-      return normalRingCentre * ( 1.0 + z * 0.5 );
+      return glm::dvec2( normalFormVertex ) * 0.5;
     },
     []( const glm::dvec3& normalFormVertex ) {
 
