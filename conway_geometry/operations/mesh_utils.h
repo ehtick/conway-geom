@@ -9,10 +9,14 @@
 
 #include <tinynurbs/tinynurbs.h>
 
+#include <algorithm>
 #include <array>
 #include <glm/glm.hpp>
+#include <map>
 #include <optional>
+#include <set>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <ranges>
 
@@ -290,11 +294,116 @@ inline void TriangulateSphericalSurface(Geometry &geometry,
 }
 
 
-// TODO: review and simplify
+// ---------------------------------------------------------------------------
+// Toroidal faces: topology-aware (theta, phi) unwrap.
+//
+// A torus's parameter domain is doubly periodic (major angle theta around the
+// axis, minor angle phi around the tube), so no single planar unwrap is
+// injective for every face. The previous dual-hemisphere machinery unwrapped
+// each tube half onto an annulus keyed on sin(phi) (2-to-1 per half, folding
+// the inner/outer equators together) and stitched the halves with a third CDT
+// pass fed by distance-thresholded "leak" edges. That fold made equator-
+// touching boundaries coincide in 2D (CDT "intersecting constraint edges" /
+// "duplicate vertex" - dropped jet-engine shaft fillets, test-models#47), and
+// the discard thresholds were calibrated to the exact annulus scale, so any
+// reparameterization broke hole nesting elsewhere (the nist_ftc_11 washer).
+//
+// Instead, classify each face by its boundary winding/coverage per axis and
+// pick a 2D domain that is injective for that class:
+//
+//   - wraps neither axis  -> rectangle in (theta', phi'), branch cuts placed
+//                            in empty angular gaps of the boundary;
+//   - wraps theta only    -> annulus: angle = theta, radius = phi' interval
+//                            normalized to [1, 2] (washer-style rims);
+//   - wraps phi only      -> annulus: angle = phi, radius = theta' interval
+//                            normalized to [1, 2] (tube segments / fillets);
+//   - wraps both          -> the boundary covers the whole torus (seam-edge
+//                            faces): emit a parametric grid directly.
+//
+// Every boundary loop stays closed in 2D, so hole nesting is handled exactly
+// by CDT's eraseOuterTrianglesAndHoles - no edge discarding, no hull fill, no
+// equator stitching. Seam-doubled boundary edges dedupe to a single interior
+// constraint. The coarse CDT triangles are then refined by the shared
+// adaptive on-surface subdivision (tesselate), which restores metric accuracy
+// regardless of the unwrap's distortion.
+// ---------------------------------------------------------------------------
+
+namespace toroidal_detail {
+
+constexpr double kPi    = 3.141592653589793238462643;
+constexpr double kTwoPi = 2.0 * kPi;
+
+/** Wrap an angle difference into (-pi, pi]. */
+inline double wrapDeltaPi( double delta ) {
+
+  delta = std::fmod( delta, kTwoPi );
+
+  if ( delta > kPi ) {
+    delta -= kTwoPi;
+  } else if ( delta <= -kPi ) {
+    delta += kTwoPi;
+  }
+
+  return delta;
+}
+
+/** Positive modulo into [0, 2pi). */
+inline double positiveMod2Pi( double angle ) {
+
+  double result = std::fmod( angle, kTwoPi );
+
+  if ( result < 0 ) {
+    result += kTwoPi;
+  }
+
+  return result;
+}
+
+struct BoundaryPoint {
+  glm::dvec3 world;
+  double     theta;
+  double     phi;
+};
+
+/**
+ * Largest empty circular gap of angles (each in [0, 2pi)).
+ *
+ * @return { gapSize, gapMidpoint } - for an empty input the whole circle is
+ * one gap.
+ */
+inline std::pair< double, double > largestCircularGap( std::vector< double > &angles ) {
+
+  if ( angles.empty() ) {
+    return { kTwoPi, 0.0 };
+  }
+
+  std::sort( angles.begin(), angles.end() );
+
+  // Wrap-around gap between the last and first sample.
+  double bestGap = ( angles.front() + kTwoPi ) - angles.back();
+  double bestMid = positiveMod2Pi( angles.back() + bestGap * 0.5 );
+
+  for ( size_t where = 1; where < angles.size(); ++where ) {
+
+    double gap = angles[ where ] - angles[ where - 1 ];
+
+    if ( gap > bestGap ) {
+      bestGap = gap;
+      bestMid = angles[ where - 1 ] + gap * 0.5;
+    }
+  }
+
+  return { bestGap, bestMid };
+}
+
+}  // namespace toroidal_detail
+
 inline void TriangulateToroidalSurface(
     Geometry &geometry,
     const std::vector<IfcBound3D> &bounds,
     IfcSurface &surface) {
+
+  using namespace toroidal_detail;
 
   if ( bounds.empty() ) {
     return;
@@ -307,91 +416,494 @@ inline void TriangulateToroidalSurface(
   glm::dvec3 vecY        = glm::normalize(surface.transformation[1]);
   glm::dvec3 vecZ        = glm::normalize(surface.transformation[2]);
 
-  WingedEdgeMesh< glm::dvec3 > mesh;
+  // Torus point in world space from (theta, phi).
+  auto torusPoint = [&]( double theta, double phi ) {
 
-  tesselateDualParametrization(
-    mesh,
-    bounds,
-    [&]( const glm::dvec3& point ) {
+    double planar = majorRadius + minorRadius * std::cos( phi );
 
-      // Produce a normalized vector from the centroid to the point.
-      glm::dvec3 deltaCentroid = point - cent;
+    glm::dvec3 local(
+      planar * std::cos( theta ),
+      planar * std::sin( theta ),
+      minorRadius * std::sin( phi ) );
 
-      // we can normalize first because rotation is invariant
-      // relative the centroid
-      double dx = glm::dot( vecX, deltaCentroid );
-      double dy = glm::dot( vecY, deltaCentroid );
-      double dz = glm::dot (vecZ, deltaCentroid );
+    return vecX * local.x + vecY * local.y + vecZ * local.z + cent;
+  };
 
-      glm::dvec2 planar = glm::normalize( glm::dvec2( dx, dy ) );
+  // Outward tube normal in world space at an arbitrary world-space point,
+  // used only to orient output triangles consistently.
+  auto tubeNormal = [&]( const glm::dvec3 &point ) {
 
-      glm::dvec3 normalRingCentre = 
-        glm::dvec3( 
-          glm::normalize( planar ),
-          0.0 );
+    glm::dvec3 delta = point - cent;
 
-      // Centroid on the ring.
-      glm::dvec3 ringCenter =
-        normalRingCentre * majorRadius;
+    double dx = glm::dot( vecX, delta );
+    double dy = glm::dot( vecY, delta );
+    double dz = glm::dot( vecZ, delta );
 
-      glm::dvec3 normalPointOnRing = glm::normalize( glm::dvec3( dx, dy, dz ) - ringCenter );
+    double planar = std::sqrt( dx * dx + dy * dy );
 
-      // Project the point onto the unit sphere surface
-      return ( normalRingCentre * 3.0 ) + normalPointOnRing;
-    },
-    // Unwrap the tube cross-section (minor angle phi) to a 2D annulus, radius
-    // 1.5 +/- 0.5 (inner hole 1.0, outer ring 2.0). normalForm packs
-    //   xy = (3 + cos phi) * ringDir(theta),  z = sin phi,
-    // so the tube radius is recoverable from the planar MAGNITUDE:
-    //   radius = 0.5 * |xy| = 1.5 + 0.5*cos phi,   direction = normalize(xy).
-    // Together that is just `xy * 0.5`. The previous form used
-    // `normalize(xy) * (1 + (1 +/- z)*0.5)`, i.e. it drove the radius from z =
-    // sin phi, which is 2-to-1 over each tube half: the inner equator (phi=pi,
-    // xy=(2,0)) and outer equator (phi=0, xy=(4,0)) both collapsed onto radius
-    // 1.5. Those coincident-in-2D-but-distinct-in-3D boundary points made CDT
-    // reject the face (intersecting constraints / duplicate vertex), dropping
-    // toroidal fillet faces - e.g. the jet-engine turbine shaft, test-models
-    // issue #47. cos phi (via |xy|) is monotonic across each hemisphere, so the
-    // unwrap is now injective and the equators land at distinct radii (1 and 2).
-    [&]( const glm::dvec3& normalFormVertex ) {
+    if ( planar < 1e-12 ) {
+      return glm::dvec3( 0.0 );
+    }
 
-      return glm::dvec2( normalFormVertex ) * 0.5;
-    },
-    [&]( const glm::dvec3& normalFormVertex ) {
+    glm::dvec3 ringCenter = glm::dvec3( dx / planar, dy / planar, 0.0 ) * majorRadius;
+    glm::dvec3 local      = glm::dvec3( dx, dy, dz ) - ringCenter;
 
-      return glm::dvec2( normalFormVertex ) * 0.5;
-    },
-    []( const glm::dvec3& normalFormVertex ) {
+    double length = glm::length( local );
 
-      return ( normalFormVertex.z <= 0.0 ) ? 0 : 1;
-    },
-    []( const glm::dvec3& normalFormVertex1,
-        const glm::dvec3& normalFormVertex2,
-        const glm::dvec2& paramVertex1,
-        const glm::dvec2& paramVertex2 ) {
+    if ( length < 1e-12 ) {
+      return glm::dvec3( 0.0 );
+    }
 
-      if ( normalFormVertex1.z <= 0.0 && normalFormVertex2.z <= 0.0 ) {
-        return false;
+    local /= length;
+
+    return vecX * local.x + vecY * local.y + vecZ * local.z;
+  };
+
+  // --- 1. Boundary loops -> (theta, phi) samples ---------------------------
+
+  std::vector< std::vector< BoundaryPoint > > loops;
+
+  loops.reserve( bounds.size() );
+
+  for ( const IfcBound3D &bound : bounds ) {
+
+    const std::vector< glm::dvec3 > &points = bound.curve.points;
+
+    std::vector< BoundaryPoint > loop;
+
+    loop.reserve( points.size() );
+
+    auto parameterDuplicate = []( const BoundaryPoint &a, double theta, double phi ) {
+
+      return
+        std::abs( wrapDeltaPi( theta - a.theta ) ) < 1e-12 &&
+        std::abs( wrapDeltaPi( phi - a.phi ) ) < 1e-12;
+    };
+
+    for ( const glm::dvec3 &point : points ) {
+
+      glm::dvec3 delta = point - cent;
+
+      double dx = glm::dot( vecX, delta );
+      double dy = glm::dot( vecY, delta );
+      double dz = glm::dot( vecZ, delta );
+
+      if ( !std::isfinite( dx ) || !std::isfinite( dy ) || !std::isfinite( dz ) ) {
+        continue;
       }
 
-      return glm::distance( paramVertex1, paramVertex2 ) > 0.5;
-    },
-    []( const glm::dvec3& normalFormVertex1,
-        const glm::dvec3& normalFormVertex2,
-        const glm::dvec2& paramVertex1,
-        const glm::dvec2& paramVertex2 ) {
+      double planar = std::sqrt( dx * dx + dy * dy );
 
-        if ( normalFormVertex1.z >= 0.0 && normalFormVertex2.z >= 0.0 ) {
-          return false;
+      // On-axis sample (degenerate spindle torus) - theta is undefined, drop.
+      if ( planar < 1e-12 ) {
+        continue;
+      }
+
+      double theta = std::atan2( dy, dx );
+      double phi   = std::atan2( dz, planar - majorRadius );
+
+      if ( !loop.empty() && parameterDuplicate( loop.back(), theta, phi ) ) {
+        continue;
+      }
+
+      loop.push_back( BoundaryPoint{ point, theta, phi } );
+    }
+
+    // Drop the closing duplicate if the sampler emitted first == last.
+    while ( loop.size() > 1 &&
+            parameterDuplicate( loop.front(), loop.back().theta, loop.back().phi ) ) {
+      loop.pop_back();
+    }
+
+    if ( loop.size() >= 3 ) {
+      loops.push_back( std::move( loop ) );
+    }
+  }
+
+  if ( loops.empty() ) {
+    return;
+  }
+
+  // --- 2. Per-axis winding + coverage classification -----------------------
+
+  bool windsTheta = false;
+  bool windsPhi   = false;
+
+  std::vector< double > thetaSamples;
+  std::vector< double > phiSamples;
+
+  for ( const std::vector< BoundaryPoint > &loop : loops ) {
+
+    double sumTheta = 0.0;
+    double sumPhi   = 0.0;
+
+    for ( size_t where = 0, count = loop.size(); where < count; ++where ) {
+
+      const BoundaryPoint &from = loop[ where ];
+      const BoundaryPoint &to   = loop[ ( where + 1 ) % count ];
+
+      sumTheta += wrapDeltaPi( to.theta - from.theta );
+      sumPhi   += wrapDeltaPi( to.phi - from.phi );
+
+      thetaSamples.push_back( positiveMod2Pi( from.theta ) );
+      phiSamples.push_back( positiveMod2Pi( from.phi ) );
+    }
+
+    if ( std::llround( sumTheta / kTwoPi ) != 0 ) {
+      windsTheta = true;
+    }
+
+    if ( std::llround( sumPhi / kTwoPi ) != 0 ) {
+      windsPhi = true;
+    }
+  }
+
+  auto [ thetaGap, thetaCut ] = largestCircularGap( thetaSamples );
+  auto [ phiGap, phiCut ]     = largestCircularGap( phiSamples );
+
+  // Seam-doubled boundaries (a closed torus written with its seam edges
+  // walked in both directions) have zero net winding but leave no empty
+  // angular gap for a branch cut - treat a covered axis as wrapping.
+  constexpr double MINIMUM_CUT_GAP = 1e-3;
+
+  bool wrapsTheta = windsTheta || thetaGap < MINIMUM_CUT_GAP;
+  bool wrapsPhi   = windsPhi || phiGap < MINIMUM_CUT_GAP;
+
+  WingedEdgeMesh< glm::dvec3 > mesh;
+
+  // pmr::vector (AFTP arena-backing), mirrors tesselateDualParametrization.
+  auto &meshVertices = mesh.vertices;
+
+  if ( wrapsTheta && wrapsPhi ) {
+
+    // --- Full-coverage face: parametric grid -------------------------------
+    // The boundary covers both periods (closed torus with seam edges, or an
+    // exotic doubly-winding trim, which this approximates as the full torus).
+
+    constexpr int GRID_THETA = 48;
+    constexpr int GRID_PHI   = 24;
+
+    for ( int j = 0; j < GRID_PHI; ++j ) {
+      for ( int i = 0; i < GRID_THETA; ++i ) {
+        meshVertices.push_back(
+          torusPoint( i * kTwoPi / GRID_THETA, j * kTwoPi / GRID_PHI ) );
+      }
+    }
+
+    for ( int j = 0; j < GRID_PHI; ++j ) {
+      for ( int i = 0; i < GRID_THETA; ++i ) {
+
+        uint32_t i00 = static_cast< uint32_t >( j * GRID_THETA + i );
+        uint32_t i10 = static_cast< uint32_t >( j * GRID_THETA + ( i + 1 ) % GRID_THETA );
+        uint32_t i01 = static_cast< uint32_t >( ( ( j + 1 ) % GRID_PHI ) * GRID_THETA + i );
+        uint32_t i11 = static_cast< uint32_t >( ( ( j + 1 ) % GRID_PHI ) * GRID_THETA + ( i + 1 ) % GRID_THETA );
+
+        mesh.makeTriangle( i00, i10, i11 );
+        mesh.makeTriangle( i00, i11, i01 );
+      }
+    }
+
+  } else {
+
+    // --- 3. Injective 2D layout for the chosen topology --------------------
+
+    std::vector< std::vector< glm::dvec2 > > loops2D;
+
+    // A boundary edge whose cut-normalized coordinate jumps by more than pi
+    // straddles the branch cut, i.e. the face actually passes through the
+    // "empty" gap - upgrade that axis to wrapping and re-layout (each retry
+    // strictly increases the wrap flags, so this terminates).
+    for ( int attempt = 0; attempt < 3; ++attempt ) {
+
+      if ( wrapsTheta && wrapsPhi ) {
+        // Both upgraded by straddle detection - triangulated below as a grid
+        // is not possible anymore at this point; drop the face like the CDT
+        // failure path would. In practice straddles this deep mean a
+        // malformed boundary.
+        Logger::logWarning( "Toroidal unwrap: boundary straddles both branch cuts, dropping face." );
+        return;
+      }
+
+      loops2D.assign( loops.size(), {} );
+
+      double normMin  = 0.0;
+      double normSpan = 1.0;
+
+      // Cut-normalized coordinate of the non-wrapping axis (or both, for the
+      // rectangle case), computed per point: cut + ((raw - cut) mod 2pi).
+      auto normalizeTheta = [&]( double raw ) {
+        return positiveMod2Pi( raw - thetaCut );
+      };
+      auto normalizePhi = [&]( double raw ) {
+        return positiveMod2Pi( raw - phiCut );
+      };
+
+      if ( wrapsTheta ) {
+
+        // Annulus: angle = theta, radius = normalized phi in [1, 2].
+        double lo = std::numeric_limits< double >::max();
+        double hi = std::numeric_limits< double >::lowest();
+
+        for ( const std::vector< BoundaryPoint > &loop : loops ) {
+          for ( const BoundaryPoint &bp : loop ) {
+            double value = normalizePhi( bp.phi );
+            lo = std::min( lo, value );
+            hi = std::max( hi, value );
+          }
         }
 
-        return glm::distance( paramVertex1, paramVertex2 ) > 0.5;
-    } );
+        normMin  = lo;
+        normSpan = hi - lo;
+
+        if ( normSpan < 1e-9 ) {
+          return;  // Degenerate band - no interior to triangulate.
+        }
+
+        for ( size_t which = 0; which < loops.size(); ++which ) {
+          for ( const BoundaryPoint &bp : loops[ which ] ) {
+
+            double radius = 1.0 + ( normalizePhi( bp.phi ) - normMin ) / normSpan;
+
+            loops2D[ which ].push_back(
+              glm::dvec2( radius * std::cos( bp.theta ), radius * std::sin( bp.theta ) ) );
+          }
+        }
+
+      } else if ( wrapsPhi ) {
+
+        // Annulus: angle = phi, radius = normalized theta in [1, 2].
+        double lo = std::numeric_limits< double >::max();
+        double hi = std::numeric_limits< double >::lowest();
+
+        for ( const std::vector< BoundaryPoint > &loop : loops ) {
+          for ( const BoundaryPoint &bp : loop ) {
+            double value = normalizeTheta( bp.theta );
+            lo = std::min( lo, value );
+            hi = std::max( hi, value );
+          }
+        }
+
+        normMin  = lo;
+        normSpan = hi - lo;
+
+        if ( normSpan < 1e-9 ) {
+          return;
+        }
+
+        for ( size_t which = 0; which < loops.size(); ++which ) {
+          for ( const BoundaryPoint &bp : loops[ which ] ) {
+
+            double radius = 1.0 + ( normalizeTheta( bp.theta ) - normMin ) / normSpan;
+
+            loops2D[ which ].push_back(
+              glm::dvec2( radius * std::cos( bp.phi ), radius * std::sin( bp.phi ) ) );
+          }
+        }
+
+      } else {
+
+        // Rectangle in (theta', phi'), normalized per axis to [0, 1].
+        double loT = std::numeric_limits< double >::max();
+        double hiT = std::numeric_limits< double >::lowest();
+        double loP = std::numeric_limits< double >::max();
+        double hiP = std::numeric_limits< double >::lowest();
+
+        for ( const std::vector< BoundaryPoint > &loop : loops ) {
+          for ( const BoundaryPoint &bp : loop ) {
+            double tU = normalizeTheta( bp.theta );
+            double pU = normalizePhi( bp.phi );
+            loT = std::min( loT, tU );
+            hiT = std::max( hiT, tU );
+            loP = std::min( loP, pU );
+            hiP = std::max( hiP, pU );
+          }
+        }
+
+        if ( hiT - loT < 1e-9 || hiP - loP < 1e-9 ) {
+          return;
+        }
+
+        for ( size_t which = 0; which < loops.size(); ++which ) {
+          for ( const BoundaryPoint &bp : loops[ which ] ) {
+            loops2D[ which ].push_back(
+              glm::dvec2(
+                ( normalizeTheta( bp.theta ) - loT ) / ( hiT - loT ),
+                ( normalizePhi( bp.phi ) - loP ) / ( hiP - loP ) ) );
+          }
+        }
+      }
+
+      // Straddle check: consecutive samples on a non-wrapping axis must stay
+      // within half a period of each other after cut-normalization.
+      bool straddleTheta = false;
+      bool straddlePhi   = false;
+
+      for ( size_t which = 0; which < loops.size(); ++which ) {
+
+        const std::vector< BoundaryPoint > &loop = loops[ which ];
+
+        for ( size_t where = 0, count = loop.size(); where < count; ++where ) {
+
+          const BoundaryPoint &from = loop[ where ];
+          const BoundaryPoint &to   = loop[ ( where + 1 ) % count ];
+
+          if ( !wrapsTheta &&
+               std::abs( normalizeTheta( to.theta ) - normalizeTheta( from.theta ) ) > kPi ) {
+            straddleTheta = true;
+          }
+
+          if ( !wrapsPhi &&
+               std::abs( normalizePhi( to.phi ) - normalizePhi( from.phi ) ) > kPi ) {
+            straddlePhi = true;
+          }
+        }
+      }
+
+      if ( straddleTheta || straddlePhi ) {
+        wrapsTheta = wrapsTheta || straddleTheta;
+        wrapsPhi   = wrapsPhi || straddlePhi;
+        continue;
+      }
+
+      break;
+    }
+
+    if ( wrapsTheta && wrapsPhi ) {
+      return;  // Straddle upgrades exhausted the planar cases (logged above).
+    }
+
+    // --- 4. CDT input: weld 2D-coincident vertices, dedupe edges ------------
+    // Seam-doubled boundary edges (the same physical edge walked twice) and
+    // shared loop corners map to identical 2D points; welding them up front
+    // is what makes CDT's NotAllowed constraint mode safe here.
+
+    std::vector< CDT::V2d< double > > cdtVertices;
+    std::vector< glm::dvec3 >         cdtWorld;
+    std::vector< CDT::Edge >          cdtEdges;
+
+    std::map< std::pair< long long, long long >, uint32_t > weld;
+    std::set< std::pair< uint32_t, uint32_t > >             edgeSet;
+
+    auto weldVertex = [&]( const glm::dvec2 &position, const glm::dvec3 &world ) {
+
+      // 2D layouts are normalized to O(1) extents, so a fixed 1e-9 quantum
+      // welds only numerically-identical parameter points.
+      std::pair< long long, long long > key(
+        std::llround( position.x * 1e9 ),
+        std::llround( position.y * 1e9 ) );
+
+      auto [ found, isNew ] = weld.try_emplace( key, static_cast< uint32_t >( cdtVertices.size() ) );
+
+      if ( isNew ) {
+        cdtVertices.emplace_back( position.x, position.y );
+        cdtWorld.push_back( world );
+      }
+
+      return found->second;
+    };
+
+    for ( size_t which = 0; which < loops.size(); ++which ) {
+
+      const std::vector< BoundaryPoint > &loop   = loops[ which ];
+      const std::vector< glm::dvec2 >    &loop2D = loops2D[ which ];
+
+      for ( size_t where = 0, count = loop.size(); where < count; ++where ) {
+
+        size_t next = ( where + 1 ) % count;
+
+        uint32_t v1 = weldVertex( loop2D[ where ], loop[ where ].world );
+        uint32_t v2 = weldVertex( loop2D[ next ], loop[ next ].world );
+
+        if ( v1 == v2 ) {
+          continue;
+        }
+
+        std::pair< uint32_t, uint32_t > ordered( std::min( v1, v2 ), std::max( v1, v2 ) );
+
+        if ( edgeSet.insert( ordered ).second ) {
+          cdtEdges.emplace_back( v1, v2 );
+        }
+      }
+    }
+
+    if ( cdtEdges.size() < 3 ) {
+      return;
+    }
+
+    for ( const CDT::V2d< double > &v : cdtVertices ) {
+      if ( !std::isfinite( v.x ) || !std::isfinite( v.y ) ) {
+        throw std::runtime_error(
+          "conway: non-finite toroidal unwrap; dropping face" );
+      }
+    }
+
+    CDT::Triangulation< double > triangulation(
+      CDT::VertexInsertionOrder::Auto,
+      CDT::IntersectingConstraintEdges::NotAllowed, 0);
+
+    try
+    {
+      conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
+      triangulation.insertVertices( cdtVertices );
+      triangulation.insertEdges( cdtEdges );
+      triangulation.eraseOuterTrianglesAndHoles();
+    }
+    catch ( const CDT::IntersectingConstraintsError &e )
+    {
+      const CDT::V2d< double > &ev1 = cdtVertices[ e.e1().v1() ];
+      const CDT::V2d< double > &ev2 = cdtVertices[ e.e1().v2() ];
+      const CDT::V2d< double > &ev3 = cdtVertices[ e.e2().v1() ];
+      const CDT::V2d< double > &ev4 = cdtVertices[ e.e2().v2() ];
+
+      Logger::logError( "CDT Exception (torus unwrap) ((%f,%f),(%f,%f)) -> ((%f,%f),(%f,%f)): %s",
+        ev1.x, ev1.y, ev2.x, ev2.y, ev3.x, ev3.y, ev4.x, ev4.y, e.what() );
+      return;
+    }
+    catch ( const CDT::Error &e )
+    {
+      Logger::logError( "CDT Exception (torus unwrap): %s", e.what() );
+      return;
+    }
+
+    meshVertices.reserve( cdtWorld.size() );
+
+    for ( const glm::dvec3 &world : cdtWorld ) {
+      meshVertices.push_back( world );
+    }
+
+    // --- 5. Emit triangles, oriented by the analytic tube normal -----------
+
+    double senseSign = surface.sameSense ? 1.0 : -1.0;
+
+    for ( const CDT::Triangle &triangle : triangulation.triangles ) {
+
+      auto [ cdtv1, cdtv2, cdtv3 ] = triangle.vertices;
+
+      if ( cdtv1 == cdtv2 || cdtv2 == cdtv3 || cdtv3 == cdtv1 ) {
+        continue;
+      }
+
+      const glm::dvec3 &w1 = meshVertices[ cdtv1 ];
+      const glm::dvec3 &w2 = meshVertices[ cdtv2 ];
+      const glm::dvec3 &w3 = meshVertices[ cdtv3 ];
+
+      glm::dvec3 reference =
+        tubeNormal( ( w1 + w2 + w3 ) / 3.0 ) * senseSign;
+
+      if ( glm::dot( glm::cross( w2 - w1, w3 - w1 ), reference ) < 0.0 ) {
+        mesh.makeTriangle( cdtv1, cdtv3, cdtv2 );
+      } else {
+        mesh.makeTriangle( cdtv1, cdtv2, cdtv3 );
+      }
+    }
+  }
+
+  // --- 6. Shared adaptive on-surface refinement -----------------------------
 
   tesselate(
     mesh,
-    [&]( const glm::dvec3& point ) { 
-     
+    [&]( const glm::dvec3& point ) {
+
       // Produce a normalized vector from the centroid to the point.
       glm::dvec3 deltaCentroid = point - cent;
 
@@ -410,7 +922,7 @@ inline void TriangulateToroidalSurface(
       glm::dvec3 normalPointOnRing = glm::normalize( glm::dvec3( dx, dy, dz ) - ringCenter );
 
       glm::dvec3 pointOnIdentityRing = ringCenter + ( normalPointOnRing * minorRadius );
-     
+
       // Move back to the original coordinate frame.
       return
         vecX * pointOnIdentityRing.x +
