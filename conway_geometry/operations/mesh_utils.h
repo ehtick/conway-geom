@@ -598,8 +598,15 @@ inline void TriangulateToroidalSurface(
         uint32_t i01 = static_cast< uint32_t >( ( ( j + 1 ) % GRID_PHI ) * GRID_THETA + i );
         uint32_t i11 = static_cast< uint32_t >( ( ( j + 1 ) % GRID_PHI ) * GRID_THETA + ( i + 1 ) % GRID_THETA );
 
-        mesh.makeTriangle( i00, i10, i11 );
-        mesh.makeTriangle( i00, i11, i01 );
+        // (+theta, +phi) quad order gives outward winding; honor reversed
+        // face sense like the CDT path's senseSign does.
+        if ( surface.sameSense ) {
+          mesh.makeTriangle( i00, i10, i11 );
+          mesh.makeTriangle( i00, i11, i01 );
+        } else {
+          mesh.makeTriangle( i00, i11, i10 );
+          mesh.makeTriangle( i00, i01, i11 );
+        }
       }
     }
 
