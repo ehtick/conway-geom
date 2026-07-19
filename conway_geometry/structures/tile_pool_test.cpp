@@ -91,6 +91,43 @@ void testInterleavedChunksStayCorrect() {
   check(outC == c, "C correct across non-contiguous chunks");
 }
 
+void testMultiPartCommit() {
+  conway::TilePool pool(1000, 100);
+
+  // Header + two "vectors", sized so parts cross chunk boundaries mid-part
+  // (8 + 250 + 121 = 379 bytes over 100-byte chunks).
+  const auto header = ramp(8, 100);
+  const auto vertices = ramp(250, 30);
+  const auto indices = ramp(121, 60);
+
+  const conway::TilePool::PayloadPart parts[3] = {
+      {header.data(), header.size()},
+      {vertices.data(), vertices.size()},
+      {indices.data(), indices.size()},
+  };
+
+  check(pool.commitAssetParts(77, parts, 3), "multi-part commit fits");
+  check(pool.byteSizeOf(77) == 379, "multi-part logical size");
+  check(pool.segmentCountOf(77) == 4, "multi-part segment count");
+
+  // Gather-read equals the concatenation of the parts.
+  std::vector<std::byte> expected;
+  expected.insert(expected.end(), header.begin(), header.end());
+  expected.insert(expected.end(), vertices.begin(), vertices.end());
+  expected.insert(expected.end(), indices.begin(), indices.end());
+
+  std::vector<std::byte> out(379);
+  pool.readAsset(77, out.data());
+  check(out == expected, "multi-part gather equals concatenated payload");
+
+  // And the single-part path still matches (delegates to parts).
+  check(pool.commitAsset(78, expected.data(), expected.size()),
+        "single-part commit of same payload");
+  std::vector<std::byte> out2(379);
+  pool.readAsset(78, out2.data());
+  check(out2 == expected, "single-part path unchanged");
+}
+
 void testRefcountSharing() {
   conway::TilePool pool(1000, 100);
 
@@ -159,6 +196,7 @@ int main() {
   testSizingAndRounding();
   testCommitReadRoundTrip();
   testInterleavedChunksStayCorrect();
+  testMultiPartCommit();
   testRefcountSharing();
   testAllOrNothingExhaustion();
   testChurnStaysBounded();

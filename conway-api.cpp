@@ -12,6 +12,7 @@
 #include "structures/parse_buffer.h"
 #include "conway_geometry/ConwayGeometryProcessor.h"
 #include "conway_geometry/structures/alloc_telemetry.h"
+#include "conway_geometry/structures/tile_pool_api.h"
 #include "logging/Logger.h"
 
 
@@ -912,6 +913,153 @@ glm::dmat4 invert4x4( const glm::dmat4& mat ) {
 glm::dmat3 transpose3x3(const glm::dmat3& mat) {
     return glm::transpose(mat);
 }
+
+namespace {
+
+// --- Geometry tile pool glue (demand-driven residency; see
+// conway_geometry/structures/tile_pool_api.h for the payload layout and
+// bldrs-ai/conway design/new/streaming-federated-loader.md "Resident
+// memory: two regimes" for the design). Asset ids and sizes cross the JS
+// boundary as doubles (safe: express/local ids and byte sizes are well
+// under 2^53).
+
+bool InitGeometryTilePool(double budgetBytes, double chunkBytes) {
+  if (budgetBytes < 0 || chunkBytes < 0) {
+    return false;
+  }
+
+  return conway::tilePoolInit(static_cast<std::size_t>(budgetBytes),
+                              static_cast<std::size_t>(chunkBytes));
+}
+
+bool GeometryTilePoolInitialized() { return conway::tilePoolInitialized(); }
+
+/// Commit a reified geometry's GPU payload (header + float vertex data +
+/// uint32 index data) into pool chunks — the tessellation-commit seam. The
+/// fat working Geometry (dvec3 vertices, triangles, edge maps) can be
+/// dropped afterwards; the tile alone serves (re-)upload.
+bool CommitGeometryTile(double assetId,
+                        conway::geometry::Geometry& geometry) {
+  const std::uint32_t vertexFloats = geometry.GetVertexDataSize();
+  const std::uint32_t indexCount = geometry.GetIndexDataSize();
+
+  const std::uint32_t header[2] = {
+      static_cast<std::uint32_t>(vertexFloats * sizeof(float)),
+      static_cast<std::uint32_t>(indexCount * sizeof(std::uint32_t))};
+
+  // GetVertexData/GetIndexData return module-memory addresses (wasm32).
+  const auto* vertexBytes = reinterpret_cast<const std::byte*>(
+      static_cast<std::uintptr_t>(geometry.GetVertexData()));
+  const auto* indexBytes = reinterpret_cast<const std::byte*>(
+      static_cast<std::uintptr_t>(geometry.GetIndexData()));
+
+  const conway::TilePool::PayloadPart parts[3] = {
+      {reinterpret_cast<const std::byte*>(header), sizeof(header)},
+      {vertexBytes, header[0]},
+      {indexBytes, header[1]},
+  };
+
+  conway::TilePool* pool = conway::moduleTilePool().get();
+
+  if (pool == nullptr || pool->isResident(static_cast<conway::AssetId>(assetId))) {
+    return false;
+  }
+
+  return pool->commitAssetParts(static_cast<conway::AssetId>(assetId), parts, 3);
+}
+
+/// Commit a raw payload already in module memory (generic tiles; also the
+/// binding-level test path).
+bool CommitGeometryTileBytes(double assetId, double sourceAddress,
+                             double byteLength) {
+  return conway::tilePoolCommitBytes(
+      static_cast<conway::AssetId>(assetId),
+      reinterpret_cast<const std::byte*>(
+          static_cast<std::uintptr_t>(sourceAddress)),
+      static_cast<std::size_t>(byteLength));
+}
+
+bool RetainGeometryTile(double assetId) {
+  return conway::tilePoolRetain(static_cast<conway::AssetId>(assetId));
+}
+
+bool ReleaseGeometryTile(double assetId) {
+  return conway::tilePoolRelease(static_cast<conway::AssetId>(assetId));
+}
+
+bool GeometryTileResident(double assetId) {
+  return conway::tilePoolIsResident(static_cast<conway::AssetId>(assetId));
+}
+
+double GeometryTileRefCount(double assetId) {
+  return conway::tilePoolRefCount(static_cast<conway::AssetId>(assetId));
+}
+
+double GeometryTileByteSize(double assetId) {
+  return static_cast<double>(
+      conway::tilePoolByteSize(static_cast<conway::AssetId>(assetId)));
+}
+
+double GeometryTileSegmentCount(double assetId) {
+  return static_cast<double>(
+      conway::tilePoolSegmentCount(static_cast<conway::AssetId>(assetId)));
+}
+
+double GeometryTileSegmentAddress(double assetId, double segment) {
+  return static_cast<double>(conway::tilePoolSegmentAddress(
+      static_cast<conway::AssetId>(assetId),
+      static_cast<std::size_t>(segment)));
+}
+
+double GeometryTileSegmentByteLength(double assetId, double segment) {
+  return static_cast<double>(conway::tilePoolSegmentByteLength(
+      static_cast<conway::AssetId>(assetId),
+      static_cast<std::size_t>(segment)));
+}
+
+/// Header readers for geometry tiles (byte lengths of the two payload
+/// spans). The 8-byte header is contiguous in the first segment by the
+/// init-time chunk-size floor.
+double GeometryTileVertexByteLength(double assetId) {
+  const std::uintptr_t address = conway::tilePoolSegmentAddress(
+      static_cast<conway::AssetId>(assetId), 0);
+
+  if (address == 0) {
+    return 0;
+  }
+
+  return *reinterpret_cast<const std::uint32_t*>(address);
+}
+
+double GeometryTileIndexByteLength(double assetId) {
+  const std::uintptr_t address = conway::tilePoolSegmentAddress(
+      static_cast<conway::AssetId>(assetId), 0);
+
+  if (address == 0) {
+    return 0;
+  }
+
+  return *(reinterpret_cast<const std::uint32_t*>(address) + 1);
+}
+
+double GeometryTilePoolBytesInUse() {
+  return static_cast<double>(conway::tilePoolStats().bytesInUse);
+}
+
+double GeometryTilePoolTotalBytes() {
+  conway::TilePool* pool = conway::moduleTilePool().get();
+  return pool == nullptr ? 0 : static_cast<double>(pool->totalBytes());
+}
+
+double GeometryTilePoolFreeChunks() {
+  return static_cast<double>(conway::tilePoolStats().freeChunks);
+}
+
+double GeometryTilePoolFailedCommits() {
+  return static_cast<double>(conway::tilePoolStats().failedCommits);
+}
+
+}  // namespace
 
 EMSCRIPTEN_BINDINGS(my_module) {
   /*
@@ -1892,8 +2040,37 @@ EMSCRIPTEN_BINDINGS(my_module) {
   emscripten::function("getPolyCurve", &GetPolyCurve,
                        emscripten::allow_raw_pointers());
 
-  emscripten::function("resizeVectorVectorDouble", 
+  emscripten::function("resizeVectorVectorDouble",
   &resizeVectorVectorDouble, emscripten::allow_raw_pointers());
-  emscripten::function("getSweptDiskSolid", 
+  emscripten::function("getSweptDiskSolid",
   &GetSweptDiskSolid, emscripten::allow_raw_pointers());
+
+  // Geometry tile pool (demand-driven residency — see tile_pool_api.h).
+  emscripten::function("initGeometryTilePool", &InitGeometryTilePool);
+  emscripten::function("geometryTilePoolInitialized",
+                       &GeometryTilePoolInitialized);
+  emscripten::function("commitGeometryTile", &CommitGeometryTile);
+  emscripten::function("commitGeometryTileBytes", &CommitGeometryTileBytes);
+  emscripten::function("retainGeometryTile", &RetainGeometryTile);
+  emscripten::function("releaseGeometryTile", &ReleaseGeometryTile);
+  emscripten::function("geometryTileResident", &GeometryTileResident);
+  emscripten::function("geometryTileRefCount", &GeometryTileRefCount);
+  emscripten::function("geometryTileByteSize", &GeometryTileByteSize);
+  emscripten::function("geometryTileSegmentCount", &GeometryTileSegmentCount);
+  emscripten::function("geometryTileSegmentAddress",
+                       &GeometryTileSegmentAddress);
+  emscripten::function("geometryTileSegmentByteLength",
+                       &GeometryTileSegmentByteLength);
+  emscripten::function("geometryTileVertexByteLength",
+                       &GeometryTileVertexByteLength);
+  emscripten::function("geometryTileIndexByteLength",
+                       &GeometryTileIndexByteLength);
+  emscripten::function("geometryTilePoolBytesInUse",
+                       &GeometryTilePoolBytesInUse);
+  emscripten::function("geometryTilePoolTotalBytes",
+                       &GeometryTilePoolTotalBytes);
+  emscripten::function("geometryTilePoolFreeChunks",
+                       &GeometryTilePoolFreeChunks);
+  emscripten::function("geometryTilePoolFailedCommits",
+                       &GeometryTilePoolFailedCommits);
 }

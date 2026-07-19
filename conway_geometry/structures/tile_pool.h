@@ -129,6 +129,13 @@ class TilePool {
     return true;
   }
 
+  /// One contiguous piece of a to-be-committed payload (iovec-style), so a
+  /// header + several vectors commit without first being concatenated.
+  struct PayloadPart {
+    const std::byte* data = nullptr;
+    std::size_t byteLength = 0;
+  };
+
   /// Make an asset resident with refCount 1 by scatter-copying `byteSize`
   /// bytes from `payload` into freshly acquired chunks. All-or-nothing:
   /// returns false (and changes nothing) if the free chunks can't cover it —
@@ -136,7 +143,23 @@ class TilePool {
   /// resident (use retainAsset first).
   bool commitAsset(AssetId asset, const std::byte* payload,
                    std::size_t byteSize) {
+    const PayloadPart part{payload, byteSize};
+    return commitAssetParts(asset, &part, 1);
+  }
+
+  /// As commitAsset, but the payload is the concatenation of `partCount`
+  /// discontiguous parts — the real tessellation-commit shape (a small
+  /// header plus the reified vertex and index vectors), copied straight
+  /// into chunks with no intermediate contiguous buffer.
+  bool commitAssetParts(AssetId asset, const PayloadPart* parts,
+                        std::size_t partCount) {
     assert(assets_.find(asset) == assets_.end());
+
+    std::size_t byteSize = 0;
+
+    for (std::size_t part = 0; part < partCount; ++part) {
+      byteSize += parts[part].byteLength;
+    }
 
     const std::size_t needed = (byteSize + chunkBytes_ - 1) / chunkBytes_;
 
@@ -150,18 +173,36 @@ class TilePool {
     entry.refCount = 1;
     entry.chunks.reserve(needed);
 
-    std::size_t copied = 0;
-
     for (std::size_t where = 0; where < needed; ++where) {
-      const std::uint32_t chunk = freeList_.back();
+      entry.chunks.push_back(freeList_.back());
       freeList_.pop_back();
-      entry.chunks.push_back(chunk);
+    }
 
-      const std::size_t span =
-          byteSize - copied < chunkBytes_ ? byteSize - copied : chunkBytes_;
+    // Walk parts and chunks together: fill each chunk from as many part
+    // spans as it takes, crossing part boundaries mid-chunk when needed.
+    std::size_t chunkIndex = 0;
+    std::size_t chunkFill = 0;
 
-      std::memcpy(chunkData(chunk), payload + copied, span);
-      copied += span;
+    for (std::size_t part = 0; part < partCount; ++part) {
+      const std::byte* source = parts[part].data;
+      std::size_t remaining = parts[part].byteLength;
+
+      while (remaining > 0) {
+        if (chunkFill == chunkBytes_) {
+          ++chunkIndex;
+          chunkFill = 0;
+        }
+
+        const std::size_t space = chunkBytes_ - chunkFill;
+        const std::size_t span = remaining < space ? remaining : space;
+
+        std::memcpy(chunkData(entry.chunks[chunkIndex]) + chunkFill, source,
+                    span);
+
+        source += span;
+        remaining -= span;
+        chunkFill += span;
+      }
     }
 
     assets_.emplace(asset, std::move(entry));
