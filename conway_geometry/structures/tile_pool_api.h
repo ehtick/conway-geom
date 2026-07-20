@@ -135,8 +135,7 @@ inline bool tilePoolReadAsset(AssetId asset, std::byte* destination) {
     return false;
   }
 
-  pool->readAsset(asset, destination);
-  return true;
+  return pool->readAsset(asset, destination);
 }
 
 inline TilePool::Stats tilePoolStats() {

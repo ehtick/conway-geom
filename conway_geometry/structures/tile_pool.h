@@ -151,9 +151,17 @@ class TilePool {
   /// discontiguous parts — the real tessellation-commit shape (a small
   /// header plus the reified vertex and index vectors), copied straight
   /// into chunks with no intermediate contiguous buffer.
+  ///
+  /// Committing an already-resident asset is a caller bug (use retainAsset);
+  /// it asserts in debug and returns false with no state change in release —
+  /// never a silent chunk leak.
   bool commitAssetParts(AssetId asset, const PayloadPart* parts,
                         std::size_t partCount) {
     assert(assets_.find(asset) == assets_.end());
+
+    if (assets_.find(asset) != assets_.end()) {
+      return false;
+    }
 
     std::size_t byteSize = 0;
 
@@ -213,9 +221,18 @@ class TilePool {
   /// Drop a reference. On the last reference the asset's chunks return to
   /// the freelist and true is returned (the caller's cue to drop any
   /// derived state, e.g. GPU buffers).
+  ///
+  /// Releasing a non-resident asset is a caller bug; it asserts in debug and
+  /// returns false with no state change in release — never UB on a missing
+  /// entry.
   bool releaseAsset(AssetId asset) {
     auto found = assets_.find(asset);
     assert(found != assets_.end());
+
+    if (found == assets_.end()) {
+      return false;
+    }
+
     ++releases_;
 
     if (--found->second.refCount > 0) {
@@ -238,12 +255,18 @@ class TilePool {
 
   /// Pointer + byte length of one of an asset's segments, in payload order.
   /// Valid until the asset's last release. This is the zero-copy consumption
-  /// path (e.g. one bufferSubData per segment at GPU upload).
+  /// path (e.g. one bufferSubData per segment at GPU upload). A missing asset
+  /// or out-of-range index asserts in debug and returns {nullptr, 0} in
+  /// release.
   std::pair<const std::byte*, std::size_t> segmentOf(AssetId asset,
                                                      std::size_t index) const {
     auto found = assets_.find(asset);
     assert(found != assets_.end());
-    assert(index < found->second.chunks.size());
+    assert(found == assets_.end() || index < found->second.chunks.size());
+
+    if (found == assets_.end() || index >= found->second.chunks.size()) {
+      return {nullptr, 0};
+    }
 
     const Asset& entry = found->second;
     const std::size_t offset = index * chunkBytes_;
@@ -255,10 +278,15 @@ class TilePool {
   }
 
   /// Gather-copy an asset's payload into contiguous storage (the copying
-  /// consumption path). `destination` must hold byteSizeOf(asset).
-  void readAsset(AssetId asset, std::byte* destination) const {
+  /// consumption path). `destination` must hold byteSizeOf(asset). A missing
+  /// asset asserts in debug and returns false (no copy) in release.
+  bool readAsset(AssetId asset, std::byte* destination) const {
     auto found = assets_.find(asset);
     assert(found != assets_.end());
+
+    if (found == assets_.end()) {
+      return false;
+    }
 
     const Asset& entry = found->second;
     std::size_t copied = 0;
@@ -271,6 +299,8 @@ class TilePool {
       std::memcpy(destination + copied, chunkData(chunk), span);
       copied += span;
     }
+
+    return true;
   }
 
   Stats stats() const {

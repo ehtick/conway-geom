@@ -164,6 +164,42 @@ void testAllOrNothingExhaustion() {
   check(pool.freeChunks() == 0, "full");
 }
 
+#ifdef NDEBUG
+// Release-build misuse hardening: caller bugs that assert in debug must be
+// safe no-ops in release — never a chunk leak (duplicate commit), never UB
+// (release/read/segment of a missing asset). Compiled only under NDEBUG so
+// the debug build's asserts stay loud.
+void testReleaseModeMisuseGuards() {
+  conway::TilePool pool(500, 100);
+
+  const auto payload = ramp(150, 5);
+  check(pool.commitAsset(1, payload.data(), payload.size()), "seed commit");
+
+  const std::size_t freeBefore = pool.freeChunks();
+
+  // Duplicate commit: refused, and crucially no chunks leak off the freelist.
+  check(!pool.commitAsset(1, payload.data(), payload.size()),
+        "duplicate commit refused");
+  check(pool.freeChunks() == freeBefore, "duplicate commit leaked no chunks");
+  check(pool.refCountOf(1) == 1, "duplicate commit did not bump refcount");
+
+  // Missing-asset operations: safe no-ops, not UB.
+  check(!pool.releaseAsset(999), "release of missing asset is a safe no-op");
+  check(pool.freeChunks() == freeBefore, "missing release changed nothing");
+
+  auto [ptr, len] = pool.segmentOf(999, 0);
+  check(ptr == nullptr && len == 0, "segmentOf missing asset yields null");
+
+  auto [ptr2, len2] = pool.segmentOf(1, 99);
+  check(ptr2 == nullptr && len2 == 0, "segmentOf out-of-range yields null");
+
+  std::vector<std::byte> out(150);
+  check(!pool.readAsset(999, out.data()), "read of missing asset refused");
+
+  check(pool.releaseAsset(1), "seed cleanly released");
+}
+#endif  // NDEBUG
+
 void testChurnStaysBounded() {
   conway::TilePool pool(500, 100);
 
@@ -197,6 +233,9 @@ int main() {
   testCommitReadRoundTrip();
   testInterleavedChunksStayCorrect();
   testMultiPartCommit();
+#ifdef NDEBUG
+  testReleaseModeMisuseGuards();
+#endif
   testRefcountSharing();
   testAllOrNothingExhaustion();
   testChurnStaysBounded();
