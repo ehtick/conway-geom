@@ -1,0 +1,252 @@
+// Standalone sanity test for the resident tile pool primitive
+// (structures/tile_pool.h). Builds with a plain host C++20 compiler — no
+// emsdk, no genie — so the invariants can be checked quickly while iterating:
+//
+//   c++ -std=c++20 -O2 -DCONWAY_TILE_POOL_STANDALONE_TEST -o /tmp/tp_test
+//       tile_pool_test.cpp  &&  /tmp/tp_test
+//
+// Exit 0 = all checks passed; non-zero = the first failed assertion.
+//
+// Guarded like scratch_arena_test.cpp so this file is an empty translation
+// unit in the normal build (the genie ConwayCoreFiles glob pulls in
+// conway_geometry/structures/**, and a stray main() would clash with the wasm
+// module entry).
+#ifdef CONWAY_TILE_POOL_STANDALONE_TEST
+
+#include "tile_pool.h"
+
+#include <cstdint>
+#include <cstdio>
+#include <vector>
+
+namespace {
+
+int g_failures = 0;
+
+void check(bool cond, const char* what) {
+  if (!cond) {
+    std::fprintf(stderr, "FAIL: %s\n", what);
+    ++g_failures;
+  }
+}
+
+std::vector<std::byte> ramp(std::size_t n, std::uint8_t seed) {
+  std::vector<std::byte> bytes(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    bytes[i] = static_cast<std::byte>((seed + i) & 0xFF);
+  }
+  return bytes;
+}
+
+void testSizingAndRounding() {
+  conway::TilePool pool(1050, 100);
+  check(pool.totalChunks() == 10, "sizing: whole chunks from byte budget");
+  check(pool.totalBytes() == 1000, "sizing: totalBytes");
+  check(pool.chunkRound(250) == 300, "chunkRound rounds up");
+  check(pool.chunkRound(300) == 300, "chunkRound exact");
+  check(pool.bytesInUse() == 0, "empty pool has no use");
+}
+
+void testCommitReadRoundTrip() {
+  conway::TilePool pool(1000, 100);
+
+  // 250 bytes spans 3 chunks — the payload straddles chunk boundaries.
+  const auto payload = ramp(250, 7);
+  check(pool.commitAsset(1, payload.data(), payload.size()), "commit fits");
+  check(pool.bytesInUse() == 300, "physical use is chunk-rounded");
+  check(pool.byteSizeOf(1) == 250, "logical size preserved");
+  check(pool.segmentCountOf(1) == 3, "segment count");
+
+  std::vector<std::byte> out(250);
+  pool.readAsset(1, out.data());
+  check(out == payload, "gather read matches scatter commit");
+
+  // Per-segment view re-assembles to the same payload.
+  std::vector<std::byte> assembled;
+  for (std::size_t seg = 0; seg < pool.segmentCountOf(1); ++seg) {
+    auto [ptr, len] = pool.segmentOf(1, seg);
+    assembled.insert(assembled.end(), ptr, ptr + len);
+  }
+  check(assembled == payload, "segment walk matches payload");
+}
+
+void testInterleavedChunksStayCorrect() {
+  conway::TilePool pool(1000, 100);
+
+  // Fragment the freelist: commit A and B, free A, commit C — C's chunks
+  // interleave with B's. Data integrity must not depend on contiguity.
+  const auto a = ramp(300, 1);
+  const auto b = ramp(300, 2);
+  const auto c = ramp(450, 3);
+
+  check(pool.commitAsset(10, a.data(), a.size()), "commit A");
+  check(pool.commitAsset(11, b.data(), b.size()), "commit B");
+  check(pool.releaseAsset(10), "free A");
+  check(pool.commitAsset(12, c.data(), c.size()), "commit C into A's holes");
+
+  std::vector<std::byte> outB(300), outC(450);
+  pool.readAsset(11, outB.data());
+  pool.readAsset(12, outC.data());
+  check(outB == b, "B intact after interleave");
+  check(outC == c, "C correct across non-contiguous chunks");
+}
+
+void testMultiPartCommit() {
+  conway::TilePool pool(1000, 100);
+
+  // Header + two "vectors", sized so parts cross chunk boundaries mid-part
+  // (8 + 250 + 121 = 379 bytes over 100-byte chunks).
+  const auto header = ramp(8, 100);
+  const auto vertices = ramp(250, 30);
+  const auto indices = ramp(121, 60);
+
+  const conway::TilePool::PayloadPart parts[3] = {
+      {header.data(), header.size()},
+      {vertices.data(), vertices.size()},
+      {indices.data(), indices.size()},
+  };
+
+  check(pool.commitAssetParts(77, parts, 3), "multi-part commit fits");
+  check(pool.byteSizeOf(77) == 379, "multi-part logical size");
+  check(pool.segmentCountOf(77) == 4, "multi-part segment count");
+
+  // Gather-read equals the concatenation of the parts.
+  std::vector<std::byte> expected;
+  expected.insert(expected.end(), header.begin(), header.end());
+  expected.insert(expected.end(), vertices.begin(), vertices.end());
+  expected.insert(expected.end(), indices.begin(), indices.end());
+
+  std::vector<std::byte> out(379);
+  pool.readAsset(77, out.data());
+  check(out == expected, "multi-part gather equals concatenated payload");
+
+  // And the single-part path still matches (delegates to parts).
+  check(pool.commitAsset(78, expected.data(), expected.size()),
+        "single-part commit of same payload");
+  std::vector<std::byte> out2(379);
+  pool.readAsset(78, out2.data());
+  check(out2 == expected, "single-part path unchanged");
+}
+
+void testRefcountSharing() {
+  conway::TilePool pool(1000, 100);
+
+  const auto payload = ramp(100, 9);
+  check(!pool.retainAsset(42), "retain of absent asset says commit needed");
+  check(pool.commitAsset(42, payload.data(), payload.size()), "commit");
+  check(pool.retainAsset(42), "second holder retains");
+  check(pool.refCountOf(42) == 2, "refcount 2");
+  check(pool.bytesInUse() == 100, "shared asset stored once");
+
+  check(!pool.releaseAsset(42), "first release keeps asset");
+  check(pool.isResident(42), "still resident for second holder");
+  check(pool.bytesInUse() == 100, "no premature free");
+
+  check(pool.releaseAsset(42), "last release frees");
+  check(!pool.isResident(42), "gone");
+  check(pool.bytesInUse() == 0, "chunks returned");
+}
+
+void testAllOrNothingExhaustion() {
+  conway::TilePool pool(300, 100);
+
+  const auto big = ramp(200, 1);
+  check(pool.commitAsset(1, big.data(), big.size()), "200 fits");
+
+  const auto tooBig = ramp(150, 2);
+  check(!pool.commitAsset(2, tooBig.data(), tooBig.size()),
+        "150 needs 2 chunks, 1 free: refused");
+  check(pool.freeChunks() == 1, "refusal changed nothing");
+  check(pool.stats().failedCommits == 1, "failure counted");
+
+  const auto exact = ramp(100, 3);
+  check(pool.commitAsset(3, exact.data(), exact.size()), "exact fit still ok");
+  check(pool.freeChunks() == 0, "full");
+}
+
+#ifdef NDEBUG
+// Release-build misuse hardening: caller bugs that assert in debug must be
+// safe no-ops in release — never a chunk leak (duplicate commit), never UB
+// (release/read/segment of a missing asset). Compiled only under NDEBUG so
+// the debug build's asserts stay loud.
+void testReleaseModeMisuseGuards() {
+  conway::TilePool pool(500, 100);
+
+  const auto payload = ramp(150, 5);
+  check(pool.commitAsset(1, payload.data(), payload.size()), "seed commit");
+
+  const std::size_t freeBefore = pool.freeChunks();
+
+  // Duplicate commit: refused, and crucially no chunks leak off the freelist.
+  check(!pool.commitAsset(1, payload.data(), payload.size()),
+        "duplicate commit refused");
+  check(pool.freeChunks() == freeBefore, "duplicate commit leaked no chunks");
+  check(pool.refCountOf(1) == 1, "duplicate commit did not bump refcount");
+
+  // Missing-asset operations: safe no-ops, not UB.
+  check(!pool.releaseAsset(999), "release of missing asset is a safe no-op");
+  check(pool.freeChunks() == freeBefore, "missing release changed nothing");
+
+  auto [ptr, len] = pool.segmentOf(999, 0);
+  check(ptr == nullptr && len == 0, "segmentOf missing asset yields null");
+
+  auto [ptr2, len2] = pool.segmentOf(1, 99);
+  check(ptr2 == nullptr && len2 == 0, "segmentOf out-of-range yields null");
+
+  std::vector<std::byte> out(150);
+  check(!pool.readAsset(999, out.data()), "read of missing asset refused");
+
+  check(pool.releaseAsset(1), "seed cleanly released");
+}
+#endif  // NDEBUG
+
+void testChurnStaysBounded() {
+  conway::TilePool pool(500, 100);
+
+  // 200 rounds of fill/evict: the region never grows and the high-water
+  // mark is the budget by construction.
+  for (int round = 0; round < 200; ++round) {
+    const auto a = ramp(300, static_cast<std::uint8_t>(round));
+    const auto b = ramp(200, static_cast<std::uint8_t>(round + 1));
+
+    check(pool.commitAsset(1, a.data(), a.size()), "churn commit A");
+    check(pool.commitAsset(2, b.data(), b.size()), "churn commit B");
+    check(pool.bytesInUse() == 500, "churn at budget");
+
+    std::vector<std::byte> out(300);
+    pool.readAsset(1, out.data());
+    check(out == a, "churn payload intact");
+
+    check(pool.releaseAsset(1), "churn free A");
+    check(pool.releaseAsset(2), "churn free B");
+    check(pool.bytesInUse() == 0, "churn drained");
+  }
+
+  check(pool.stats().commits == 400, "all commits counted");
+  check(pool.totalChunks() == 5, "pool never grew");
+}
+
+}  // namespace
+
+int main() {
+  testSizingAndRounding();
+  testCommitReadRoundTrip();
+  testInterleavedChunksStayCorrect();
+  testMultiPartCommit();
+#ifdef NDEBUG
+  testReleaseModeMisuseGuards();
+#endif
+  testRefcountSharing();
+  testAllOrNothingExhaustion();
+  testChurnStaysBounded();
+
+  if (g_failures == 0) {
+    std::printf("tile_pool_test: all checks passed\n");
+    return 0;
+  }
+
+  std::fprintf(stderr, "tile_pool_test: %d failure(s)\n", g_failures);
+  return 1;
+}
+
+#endif  // CONWAY_TILE_POOL_STANDALONE_TEST
