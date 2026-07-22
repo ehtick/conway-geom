@@ -1314,6 +1314,28 @@ inline void TriangulateToroidalSurface(
 
     std::vector< std::vector< glm::dvec2 > > loops2D;
 
+    // Interior Steiner points on the analytic (theta, phi) grid, in layout
+    // coordinates with exact world positions. CDT sees only boundary
+    // vertices otherwise, and for a face whose rails sit diametrically
+    // opposite on the tube (a half-tube patch has both long edges at z = 0)
+    // its triangles chord straight through the tube - and the closest-point
+    // refinement can never recover the arc, because every chord midpoint
+    // projects back onto the same z = 0 equators. Seeding the interior with
+    // on-surface points makes the initial triangulation follow the tube;
+    // refinement then only polishes. (Seen on the jet engine's fuel
+    // manifold: a thin R=538/r=17.5 torus split into half-tube segments
+    // rendered as flat creased ribbons.)
+    std::vector< std::pair< glm::dvec2, glm::dvec3 > > steinerPoints;
+
+    constexpr double THETA_STEP = kTwoPi / 48.0;
+    constexpr double PHI_STEP   = kTwoPi / 24.0;
+    constexpr int    MAX_GRID   = 96;
+
+    auto gridSteps = []( double span, double step, int maxSteps ) {
+      return std::clamp(
+        static_cast< int >( std::ceil( span / step ) ), 1, maxSteps );
+    };
+
     // A boundary edge whose cut-normalized coordinate jumps by more than pi
     // straddles the branch cut, i.e. the face actually passes through the
     // "empty" gap - upgrade that axis to wrapping and re-layout (each retry
@@ -1330,6 +1352,7 @@ inline void TriangulateToroidalSurface(
       }
 
       loops2D.assign( loops.size(), {} );
+      steinerPoints.clear();
 
       double normMin  = 0.0;
       double normSpan = 1.0;
@@ -1374,6 +1397,23 @@ inline void TriangulateToroidalSurface(
           }
         }
 
+        int gridTheta = gridSteps( kTwoPi, THETA_STEP, MAX_GRID );
+        int gridPhi   = gridSteps( normSpan, PHI_STEP, MAX_GRID );
+
+        for ( int i = 0; i < gridTheta; ++i ) {
+          for ( int j = 1; j < gridPhi; ++j ) {
+
+            double theta  = i * kTwoPi / gridTheta;
+            double phiCutNormalized =
+              normMin + normSpan * j / static_cast< double >( gridPhi );
+            double radius = 1.0 + ( phiCutNormalized - normMin ) / normSpan;
+
+            steinerPoints.emplace_back(
+              glm::dvec2( radius * std::cos( theta ), radius * std::sin( theta ) ),
+              torusPoint( theta, phiCut + phiCutNormalized ) );
+          }
+        }
+
       } else if ( wrapsPhi ) {
 
         // Annulus: angle = phi, radius = normalized theta in [1, 2].
@@ -1402,6 +1442,23 @@ inline void TriangulateToroidalSurface(
 
             loops2D[ which ].push_back(
               glm::dvec2( radius * std::cos( bp.phi ), radius * std::sin( bp.phi ) ) );
+          }
+        }
+
+        int gridPhi   = gridSteps( kTwoPi, PHI_STEP, MAX_GRID );
+        int gridTheta = gridSteps( normSpan, THETA_STEP, MAX_GRID );
+
+        for ( int j = 0; j < gridPhi; ++j ) {
+          for ( int i = 1; i < gridTheta; ++i ) {
+
+            double phi = j * kTwoPi / gridPhi;
+            double thetaCutNormalized =
+              normMin + normSpan * i / static_cast< double >( gridTheta );
+            double radius = 1.0 + ( thetaCutNormalized - normMin ) / normSpan;
+
+            steinerPoints.emplace_back(
+              glm::dvec2( radius * std::cos( phi ), radius * std::sin( phi ) ),
+              torusPoint( thetaCut + thetaCutNormalized, phi ) );
           }
         }
 
@@ -1434,6 +1491,26 @@ inline void TriangulateToroidalSurface(
               glm::dvec2(
                 ( normalizeTheta( bp.theta ) - loT ) / ( hiT - loT ),
                 ( normalizePhi( bp.phi ) - loP ) / ( hiP - loP ) ) );
+          }
+        }
+
+        int gridTheta = gridSteps( hiT - loT, THETA_STEP, MAX_GRID );
+        int gridPhi   = gridSteps( hiP - loP, PHI_STEP, MAX_GRID );
+
+        for ( int i = 1; i < gridTheta; ++i ) {
+          for ( int j = 1; j < gridPhi; ++j ) {
+
+            double thetaCutNormalized =
+              loT + ( hiT - loT ) * i / static_cast< double >( gridTheta );
+            double phiCutNormalized =
+              loP + ( hiP - loP ) * j / static_cast< double >( gridPhi );
+
+            steinerPoints.emplace_back(
+              glm::dvec2(
+                i / static_cast< double >( gridTheta ),
+                j / static_cast< double >( gridPhi ) ),
+              torusPoint(
+                thetaCut + thetaCutNormalized, phiCut + phiCutNormalized ) );
           }
         }
       }
@@ -1535,6 +1612,25 @@ inline void TriangulateToroidalSurface(
       return;
     }
 
+    // Interior grid points join as plain (unconstrained) vertices after the
+    // boundary, so constraint edge indices stay valid. Skip any that weld
+    // onto an existing boundary vertex.
+    size_t boundaryVertexCount = cdtVertices.size();
+
+    for ( const std::pair< glm::dvec2, glm::dvec3 > &steiner : steinerPoints ) {
+
+      std::pair< long long, long long > key(
+        std::llround( steiner.first.x * 1e9 ),
+        std::llround( steiner.first.y * 1e9 ) );
+
+      if ( weld.find( key ) != weld.end() ) {
+        continue;
+      }
+
+      cdtVertices.emplace_back( steiner.first.x, steiner.first.y );
+      cdtWorld.push_back( steiner.second );
+    }
+
     for ( const CDT::V2d< double > &v : cdtVertices ) {
       if ( !std::isfinite( v.x ) || !std::isfinite( v.y ) ) {
         throw std::runtime_error(
@@ -1542,45 +1638,79 @@ inline void TriangulateToroidalSurface(
       }
     }
 
-    CDT::Triangulation< double > triangulation(
-      CDT::VertexInsertionOrder::Auto,
-      CDT::IntersectingConstraintEdges::NotAllowed, 0);
+    // Try the seeded triangulation first; if CDT rejects the input (e.g. a
+    // grid point landing exactly on a constraint edge), retry with the
+    // boundary alone before dropping the face - only that final failure is
+    // worth logging.
+    auto runCdt = [&]( size_t vertexCount )
+        -> std::optional< std::vector< CDT::Triangle > > {
 
-    try
-    {
-      conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
-      triangulation.insertVertices( cdtVertices );
-      triangulation.insertEdges( cdtEdges );
-      triangulation.eraseOuterTrianglesAndHoles();
+      CDT::Triangulation< double > triangulation(
+        CDT::VertexInsertionOrder::Auto,
+        CDT::IntersectingConstraintEdges::NotAllowed, 0);
+
+      bool logFailure = vertexCount == boundaryVertexCount;
+
+      try
+      {
+        conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
+        triangulation.insertVertices(
+          std::vector< CDT::V2d< double > >(
+            cdtVertices.begin(),
+            cdtVertices.begin() + static_cast< ptrdiff_t >( vertexCount ) ) );
+        triangulation.insertEdges( cdtEdges );
+        triangulation.eraseOuterTrianglesAndHoles();
+      }
+      catch ( const CDT::IntersectingConstraintsError &e )
+      {
+        if ( logFailure ) {
+          const CDT::V2d< double > &ev1 = cdtVertices[ e.e1().v1() ];
+          const CDT::V2d< double > &ev2 = cdtVertices[ e.e1().v2() ];
+          const CDT::V2d< double > &ev3 = cdtVertices[ e.e2().v1() ];
+          const CDT::V2d< double > &ev4 = cdtVertices[ e.e2().v2() ];
+
+          Logger::logError( "CDT Exception (torus unwrap) ((%f,%f),(%f,%f)) -> ((%f,%f),(%f,%f)): %s",
+            ev1.x, ev1.y, ev2.x, ev2.y, ev3.x, ev3.y, ev4.x, ev4.y, e.what() );
+        }
+        return std::nullopt;
+      }
+      catch ( const CDT::Error &e )
+      {
+        if ( logFailure ) {
+          Logger::logError( "CDT Exception (torus unwrap): %s", e.what() );
+        }
+        return std::nullopt;
+      }
+
+      return std::vector< CDT::Triangle >(
+        triangulation.triangles.begin(), triangulation.triangles.end() );
+    };
+
+    size_t usedVertexCount = cdtVertices.size();
+
+    std::optional< std::vector< CDT::Triangle > > cdtTriangles =
+      runCdt( usedVertexCount );
+
+    if ( !cdtTriangles.has_value() && usedVertexCount > boundaryVertexCount ) {
+      usedVertexCount = boundaryVertexCount;
+      cdtTriangles   = runCdt( usedVertexCount );
     }
-    catch ( const CDT::IntersectingConstraintsError &e )
-    {
-      const CDT::V2d< double > &ev1 = cdtVertices[ e.e1().v1() ];
-      const CDT::V2d< double > &ev2 = cdtVertices[ e.e1().v2() ];
-      const CDT::V2d< double > &ev3 = cdtVertices[ e.e2().v1() ];
-      const CDT::V2d< double > &ev4 = cdtVertices[ e.e2().v2() ];
 
-      Logger::logError( "CDT Exception (torus unwrap) ((%f,%f),(%f,%f)) -> ((%f,%f),(%f,%f)): %s",
-        ev1.x, ev1.y, ev2.x, ev2.y, ev3.x, ev3.y, ev4.x, ev4.y, e.what() );
+    if ( !cdtTriangles.has_value() ) {
       return;
     }
-    catch ( const CDT::Error &e )
-    {
-      Logger::logError( "CDT Exception (torus unwrap): %s", e.what() );
-      return;
-    }
 
-    meshVertices.reserve( cdtWorld.size() );
+    meshVertices.reserve( usedVertexCount );
 
-    for ( const glm::dvec3 &world : cdtWorld ) {
-      meshVertices.push_back( world );
+    for ( size_t where = 0; where < usedVertexCount; ++where ) {
+      meshVertices.push_back( cdtWorld[ where ] );
     }
 
     // --- 5. Emit triangles, oriented by the analytic tube normal -----------
 
     double senseSign = surface.sameSense ? 1.0 : -1.0;
 
-    for ( const CDT::Triangle &triangle : triangulation.triangles ) {
+    for ( const CDT::Triangle &triangle : *cdtTriangles ) {
 
       auto [ cdtv1, cdtv2, cdtv3 ] = triangle.vertices;
 
@@ -1604,6 +1734,20 @@ inline void TriangulateToroidalSurface(
   }
 
   // --- 6. Shared adaptive on-surface refinement -----------------------------
+
+  // Scale-aware refinement floor, as in the extrusion/cylinder unwraps: the
+  // absolute MAX_DEFLECTION is unreachable at model scale and reads as
+  // "refine until the budget runs out" - tolerable when the budget was tiny
+  // (boundary-only CDT), runaway now that interior seeding raises it.
+  glm::dvec3 boxMin( std::numeric_limits< double >::max() );
+  glm::dvec3 boxMax( std::numeric_limits< double >::lowest() );
+
+  for ( const glm::dvec3 &vertex : mesh.vertices ) {
+    boxMin = glm::min( boxMin, vertex );
+    boxMax = glm::max( boxMax, vertex );
+  }
+
+  double deflection = glm::distance( boxMin, boxMax ) * 1e-3;
 
   tesselate(
     mesh,
@@ -1635,7 +1779,7 @@ inline void TriangulateToroidalSurface(
         vecZ * pointOnIdentityRing.z + cent;
     },
     mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
-    MAX_DEFLECTION );
+    std::max( MAX_DEFLECTION, deflection * deflection ) );
 
   appendMeshToGeometry( mesh, geometry );
 }
