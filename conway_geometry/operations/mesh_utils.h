@@ -36,15 +36,515 @@ constexpr double MAX_TRIANGLE_AMPLIFACTION = 32;
 
 
 // TODO: review and simplify
+// ---------------------------------------------------------------------------
+// Shared helpers for unwrapping boundary loops of periodic surfaces (tori,
+// surfaces of revolution) into planar CDT domains. BoundaryPoint's second
+// parameter is the minor/tube angle for tori and the normalized profile
+// arclength for revolutions.
+// ---------------------------------------------------------------------------
+
+namespace unwrap_detail {
+
+constexpr double kPi    = 3.141592653589793238462643;
+constexpr double kTwoPi = 2.0 * kPi;
+
+/** Wrap an angle difference into (-pi, pi]. */
+inline double wrapDeltaPi( double delta ) {
+
+  delta = std::fmod( delta, kTwoPi );
+
+  if ( delta > kPi ) {
+    delta -= kTwoPi;
+  } else if ( delta <= -kPi ) {
+    delta += kTwoPi;
+  }
+
+  return delta;
+}
+
+/** Positive modulo into [0, 2pi). */
+inline double positiveMod2Pi( double angle ) {
+
+  double result = std::fmod( angle, kTwoPi );
+
+  if ( result < 0 ) {
+    result += kTwoPi;
+  }
+
+  return result;
+}
+
+struct BoundaryPoint {
+  glm::dvec3 world;
+  double     theta;
+  double     phi;
+};
+
+/**
+ * Largest empty circular gap of angles (each in [0, 2pi)).
+ *
+ * @return { gapSize, gapMidpoint } - for an empty input the whole circle is
+ * one gap.
+ */
+inline std::pair< double, double > largestCircularGap( std::vector< double > &angles ) {
+
+  if ( angles.empty() ) {
+    return { kTwoPi, 0.0 };
+  }
+
+  std::sort( angles.begin(), angles.end() );
+
+  // Wrap-around gap between the last and first sample.
+  double bestGap = ( angles.front() + kTwoPi ) - angles.back();
+  double bestMid = positiveMod2Pi( angles.back() + bestGap * 0.5 );
+
+  for ( size_t where = 1; where < angles.size(); ++where ) {
+
+    double gap = angles[ where ] - angles[ where - 1 ];
+
+    if ( gap > bestGap ) {
+      bestGap = gap;
+      bestMid = angles[ where - 1 ] + gap * 0.5;
+    }
+  }
+
+  return { bestGap, bestMid };
+}
+
+}  // namespace unwrap_detail
+
 inline void TriangulateRevolution(Geometry &geometry,
                                   std::vector<IfcBound3D> &bounds,
                                   IfcSurface &surface) {
-  // First we get the revolution data
+
+  using namespace unwrap_detail;
 
   glm::dvec3 cent = surface.RevolutionSurface.Direction[3];
   glm::dvec3 vecX = glm::normalize(surface.RevolutionSurface.Direction[0]);
   glm::dvec3 vecY = glm::normalize(surface.RevolutionSurface.Direction[1]);
   glm::dvec3 vecZ = glm::normalize(surface.RevolutionSurface.Direction[2]);
+
+  // Profile in the revolution frame as (radius, height) samples plus
+  // cumulative arclength - shared by the trimmed unwrap, the swept-grid
+  // fallback, and the adaptive refinement's closest-point projection.
+
+  std::vector< glm::dvec2 > profileRZ;
+  std::vector< double >     profileArc;
+
+  profileRZ.reserve( surface.RevolutionSurface.Profile.curve.points.size() );
+  profileArc.reserve( surface.RevolutionSurface.Profile.curve.points.size() );
+
+  for ( const glm::dvec3 &point : surface.RevolutionSurface.Profile.curve.points ) {
+
+    glm::dvec3 delta = point - cent;
+
+    double dx = glm::dot( vecX, delta );
+    double dy = glm::dot( vecY, delta );
+    double dz = glm::dot( vecZ, delta );
+
+    profileRZ.emplace_back( std::sqrt( dx * dx + dy * dy ), dz );
+  }
+
+  double profileLength = 0.0;
+
+  profileArc.push_back( 0.0 );
+
+  for ( size_t where = 1; where < profileRZ.size(); ++where ) {
+    profileLength += glm::distance( profileRZ[ where - 1 ], profileRZ[ where ] );
+    profileArc.push_back( profileLength );
+  }
+
+  if ( profileRZ.empty() ) {
+    return;
+  }
+
+  // Closest point on the profile polyline to a (radius, height) query:
+  // the snapped point and its normalized arclength parameter.
+  auto closestOnProfile = [&]( const glm::dvec2 &query ) {
+
+    glm::dvec2 best      = profileRZ[ 0 ];
+    double     bestArc   = 0.0;
+    double     bestDist2 = std::numeric_limits< double >::max();
+
+    for ( size_t where = 0; where + 1 < profileRZ.size(); ++where ) {
+
+      const glm::dvec2 &from = profileRZ[ where ];
+      const glm::dvec2 &to   = profileRZ[ where + 1 ];
+
+      glm::dvec2 segment = to - from;
+      double     length2 = glm::dot( segment, segment );
+
+      double t =
+        length2 > 0 ?
+          std::clamp( glm::dot( query - from, segment ) / length2, 0.0, 1.0 ) :
+          0.0;
+
+      glm::dvec2 candidate = from + segment * t;
+      double     dist2     = glm::dot( query - candidate, query - candidate );
+
+      if ( dist2 < bestDist2 ) {
+        bestDist2 = dist2;
+        best      = candidate;
+        bestArc   = profileArc[ where ] + t * std::sqrt( length2 );
+      }
+    }
+
+    double tNormalized = profileLength > 0 ? bestArc / profileLength : 0.0;
+
+    return std::pair< glm::dvec2, double >( best, tNormalized );
+  };
+
+  // Adaptive-refinement projection (shared by both paths): keep the query
+  // point's angle around the axis, snap its (radius, height) to the profile.
+  auto surfaceProjection = [&]( const glm::dvec3 &point ) {
+
+    glm::dvec3 delta = point - cent;
+
+    double dx = glm::dot( vecX, delta );
+    double dy = glm::dot( vecY, delta );
+    double dz = glm::dot( vecZ, delta );
+
+    double dd = std::sqrt( dx * dx + dy * dy );
+
+    if ( dd < 1e-12 ) {
+      return point;  // On the axis - angle undefined, nothing to round.
+    }
+
+    double sinAngle = dx / dd;
+    double cosAngle = dy / dd;
+
+    glm::dvec2 best = closestOnProfile( glm::dvec2( dd, dz ) ).first;
+
+    return
+      vecX * ( sinAngle * best.x ) +
+      vecY * ( cosAngle * best.x ) +
+      vecZ * best.y + cent;
+  };
+
+  auto refineAndAppend = [&]( WingedEdgeMesh< glm::dvec3 > &mesh ) {
+
+    tesselate(
+      mesh,
+      surfaceProjection,
+      mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+      MAX_DEFLECTION );
+
+    appendMeshToGeometry( mesh, geometry );
+  };
+
+  // --- Trimmed path (#149): unwrap the actual boundary loops into
+  // (theta, t) - theta the periodic angle around the axis, t the normalized
+  // (non-periodic) profile arclength - and CDT them, so partial sweeps and
+  // interior holes are honored instead of being papered over by a swept
+  // patch. Any degeneracy (no usable loops, non-finite layout, intersecting
+  // constraints) falls back to the swept grid below, which reproduces the
+  // pre-trim behavior - a dirty boundary can never make output worse than it
+  // was. A closed profile revolved is torus-like (t periodic); that rare
+  // case stays on the fallback too.
+
+  bool profileClosed =
+    profileRZ.size() > 2 &&
+    glm::distance( profileRZ.front(), profileRZ.back() ) < profileLength * 1e-9;
+
+  if ( !profileClosed && profileRZ.size() >= 2 && profileLength > 0 ) {
+
+    std::vector< std::vector< BoundaryPoint > > loops;
+
+    loops.reserve( bounds.size() );
+
+    auto parameterDuplicate = []( const BoundaryPoint &a, double theta, double t ) {
+
+      return
+        std::abs( wrapDeltaPi( theta - a.theta ) ) < 1e-12 &&
+        std::abs( t - a.phi ) < 1e-12;
+    };
+
+    for ( const IfcBound3D &bound : bounds ) {
+
+      std::vector< BoundaryPoint > loop;
+
+      loop.reserve( bound.curve.points.size() );
+
+      for ( const glm::dvec3 &point : bound.curve.points ) {
+
+        glm::dvec3 delta = point - cent;
+
+        double dx = glm::dot( vecX, delta );
+        double dy = glm::dot( vecY, delta );
+        double dz = glm::dot( vecZ, delta );
+
+        if ( !std::isfinite( dx ) || !std::isfinite( dy ) || !std::isfinite( dz ) ) {
+          continue;
+        }
+
+        double dd = std::sqrt( dx * dx + dy * dy );
+
+        // On-axis sample - the angle is undefined, drop it.
+        if ( dd < 1e-12 ) {
+          continue;
+        }
+
+        // Grid/projection convention: local x = sin(theta) * d, y = cos(theta) * d.
+        double theta = std::atan2( dx, dy );
+        double t     = closestOnProfile( glm::dvec2( dd, dz ) ).second;
+
+        if ( !loop.empty() && parameterDuplicate( loop.back(), theta, t ) ) {
+          continue;
+        }
+
+        loop.push_back( BoundaryPoint{ point, theta, t } );
+      }
+
+      while ( loop.size() > 1 &&
+              parameterDuplicate( loop.front(), loop.back().theta, loop.back().phi ) ) {
+        loop.pop_back();
+      }
+
+      if ( loop.size() >= 3 ) {
+        loops.push_back( std::move( loop ) );
+      }
+    }
+
+    if ( !loops.empty() ) {
+
+      bool windsTheta = false;
+
+      std::vector< double > thetaSamples;
+
+      for ( const std::vector< BoundaryPoint > &loop : loops ) {
+
+        double sumTheta = 0.0;
+
+        for ( size_t where = 0, count = loop.size(); where < count; ++where ) {
+
+          const BoundaryPoint &from = loop[ where ];
+          const BoundaryPoint &to   = loop[ ( where + 1 ) % count ];
+
+          sumTheta += wrapDeltaPi( to.theta - from.theta );
+
+          thetaSamples.push_back( positiveMod2Pi( from.theta ) );
+        }
+
+        if ( std::llround( sumTheta / kTwoPi ) != 0 ) {
+          windsTheta = true;
+        }
+      }
+
+      auto [ thetaGap, thetaCut ] = largestCircularGap( thetaSamples );
+
+      // A boundary that covers the whole circle without netting a winding
+      // (seam edges walked both ways) leaves no gap for a branch cut.
+      bool wrapsTheta = windsTheta || thetaGap < 1e-3;
+
+      std::vector< std::vector< glm::dvec2 > > loops2D;
+
+      bool layoutOk = false;
+
+      // A rectangle edge jumping more than pi in cut-normalized theta
+      // straddles the branch cut - upgrade to the wrapping (annulus) layout,
+      // which has no cut to straddle, and retry once.
+      for ( int attempt = 0; attempt < 2 && !layoutOk; ++attempt ) {
+
+        loops2D.clear();
+        loops2D.reserve( loops.size() );
+        layoutOk = true;
+
+        if ( wrapsTheta ) {
+
+          // Annulus: angle = theta, radius = 1 + t in [1, 2].
+          for ( const std::vector< BoundaryPoint > &loop : loops ) {
+
+            std::vector< glm::dvec2 > loop2D;
+
+            loop2D.reserve( loop.size() );
+
+            for ( const BoundaryPoint &point : loop ) {
+              loop2D.emplace_back(
+                ( 1.0 + point.phi ) * std::cos( point.theta ),
+                ( 1.0 + point.phi ) * std::sin( point.theta ) );
+            }
+
+            loops2D.push_back( std::move( loop2D ) );
+          }
+
+        } else {
+
+          double loTheta = std::numeric_limits< double >::max();
+          double hiTheta = std::numeric_limits< double >::lowest();
+
+          std::vector< std::vector< double > > normalized;
+
+          normalized.reserve( loops.size() );
+
+          for ( const std::vector< BoundaryPoint > &loop : loops ) {
+
+            std::vector< double > loopNormalized;
+
+            loopNormalized.reserve( loop.size() );
+
+            double previous = 0.0;
+
+            for ( size_t where = 0; where < loop.size(); ++where ) {
+
+              double value = positiveMod2Pi( loop[ where ].theta - thetaCut );
+
+              if ( where > 0 && std::abs( value - previous ) > kPi ) {
+                wrapsTheta = true;
+                layoutOk   = false;
+                break;
+              }
+
+              previous = value;
+              loTheta  = std::min( loTheta, value );
+              hiTheta  = std::max( hiTheta, value );
+              loopNormalized.push_back( value );
+            }
+
+            if ( !layoutOk ) {
+              break;
+            }
+
+            normalized.push_back( std::move( loopNormalized ) );
+          }
+
+          if ( layoutOk ) {
+
+            double span = std::max( hiTheta - loTheta, 1e-12 );
+
+            for ( size_t which = 0; which < loops.size(); ++which ) {
+
+              std::vector< glm::dvec2 > loop2D;
+
+              loop2D.reserve( loops[ which ].size() );
+
+              for ( size_t where = 0; where < loops[ which ].size(); ++where ) {
+                loop2D.emplace_back(
+                  ( normalized[ which ][ where ] - loTheta ) / span,
+                  loops[ which ][ where ].phi );
+              }
+
+              loops2D.push_back( std::move( loop2D ) );
+            }
+          }
+        }
+      }
+
+      if ( layoutOk ) {
+
+        // Weld 2D-coincident vertices and dedupe edges, exactly like the
+        // toroidal unwrap - seam-doubled boundary edges become single
+        // interior constraints, which is what makes NotAllowed safe.
+        std::vector< CDT::V2d< double > > cdtVertices;
+        std::vector< glm::dvec3 >         cdtWorld;
+        std::vector< CDT::Edge >          cdtEdges;
+
+        std::map< std::pair< long long, long long >, uint32_t > weld;
+        std::set< std::pair< uint32_t, uint32_t > >             edgeSet;
+
+        bool inputFinite = true;
+
+        auto weldVertex = [&]( const glm::dvec2 &position, const glm::dvec3 &world ) {
+
+          std::pair< long long, long long > key(
+            std::llround( position.x * 1e9 ),
+            std::llround( position.y * 1e9 ) );
+
+          auto [ found, isNew ] =
+            weld.try_emplace( key, static_cast< uint32_t >( cdtVertices.size() ) );
+
+          if ( isNew ) {
+            if ( !std::isfinite( position.x ) || !std::isfinite( position.y ) ) {
+              inputFinite = false;
+            }
+            cdtVertices.emplace_back( position.x, position.y );
+            cdtWorld.push_back( world );
+          }
+
+          return found->second;
+        };
+
+        for ( size_t which = 0; which < loops.size(); ++which ) {
+
+          const std::vector< BoundaryPoint > &loop   = loops[ which ];
+          const std::vector< glm::dvec2 >    &loop2D = loops2D[ which ];
+
+          for ( size_t where = 0, count = loop.size(); where < count; ++where ) {
+
+            size_t next = ( where + 1 ) % count;
+
+            uint32_t v1 = weldVertex( loop2D[ where ], loop[ where ].world );
+            uint32_t v2 = weldVertex( loop2D[ next ], loop[ next ].world );
+
+            if ( v1 == v2 ) {
+              continue;
+            }
+
+            std::pair< uint32_t, uint32_t > ordered(
+              std::min( v1, v2 ), std::max( v1, v2 ) );
+
+            if ( edgeSet.insert( ordered ).second ) {
+              cdtEdges.emplace_back( v1, v2 );
+            }
+          }
+        }
+
+        if ( inputFinite && cdtEdges.size() >= 3 ) {
+
+          CDT::Triangulation< double > triangulation(
+            CDT::VertexInsertionOrder::Auto,
+            CDT::IntersectingConstraintEdges::NotAllowed, 0 );
+
+          bool triangulated = false;
+
+          try
+          {
+            conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
+            triangulation.insertVertices( cdtVertices );
+            triangulation.insertEdges( cdtEdges );
+            triangulation.eraseOuterTrianglesAndHoles();
+            triangulated = true;
+          }
+          catch ( const CDT::Error &e )
+          {
+            // Fall back to the swept grid - never worse than the old output.
+            Logger::logError( "CDT Exception (revolution unwrap): %s", e.what() );
+          }
+
+          if ( triangulated ) {
+
+            WingedEdgeMesh< glm::dvec3 > mesh;
+
+            mesh.vertices.reserve( cdtWorld.size() );
+
+            for ( const glm::dvec3 &world : cdtWorld ) {
+              mesh.vertices.push_back( world );
+            }
+
+            // No per-triangle orientation pass: appendMeshToGeometry
+            // normalizes winding by dominant-plane projection either way.
+            for ( const CDT::Triangle &triangle : triangulation.triangles ) {
+
+              auto [ cdtv1, cdtv2, cdtv3 ] = triangle.vertices;
+
+              if ( cdtv1 == cdtv2 || cdtv2 == cdtv3 || cdtv3 == cdtv1 ) {
+                continue;
+              }
+
+              mesh.makeTriangle( cdtv1, cdtv2, cdtv3 );
+            }
+
+            if ( !mesh.triangles.empty() ) {
+              refineAndAppend( mesh );
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // --- Fallback: sweep the whole profile across the boundary's angular
+  // bounding box (the pre-trim approximation).
 
   std::vector<std::vector<glm::dvec3>> newPoints;
 
@@ -143,9 +643,6 @@ inline void TriangulateRevolution(Geometry &geometry,
     }
   }
 
-  // Then we use the start and end angles as bounding boxes of the boundary ...
-  //  ... we will represent this bounding box.
-
   double startRad = startDegrees / 180 * (double)CONST_PI;
   double endRad   = endDegrees / 180 * (double)CONST_PI;
   double radSpan  = endRad - startRad;
@@ -172,46 +669,18 @@ inline void TriangulateRevolution(Geometry &geometry,
 
   double radStep  = radSpan / (numRots - 1);
 
-  for (size_t i = 0; i < surface.RevolutionSurface.Profile.curve.points.size();
-       i++) {
-    double xx = surface.RevolutionSurface.Profile.curve.points[i].x - cent.x;
-    double yy = surface.RevolutionSurface.Profile.curve.points[i].y - cent.y;
-    double zz = surface.RevolutionSurface.Profile.curve.points[i].z - cent.z;
-
-    double dx = vecX.x * xx + vecX.y * yy + vecX.z * zz;
-    double dy = vecY.x * xx + vecY.y * yy + vecY.z * zz;
-    double dz = vecZ.x * xx + vecZ.y * yy + vecZ.z * zz;
-    double dd = sqrt(dx * dx + dy * dy);
+  for ( const glm::dvec2 &rz : profileRZ ) {
     for (int r = 0; r < numRots; r++) {
       double angle = startRad + r * radStep;
-      double dtempX = sin(angle) * dd;
-      double dtempY = cos(angle) * dd;
-      double newPx = dtempX * vecX.x + dtempY * vecY.x + dz * vecZ.x + cent.x;
-      double newPy = dtempX * vecX.y + dtempY * vecY.y + dz * vecZ.y + cent.y;
-      double newPz = dtempX * vecX.z + dtempY * vecY.z + dz * vecZ.z + cent.z;
-      glm::dvec3 newPt = glm::dvec3(newPx, newPy, newPz);
-      newPoints[r].push_back(newPt);
+      double dtempX = sin(angle) * rz.x;
+      double dtempY = cos(angle) * rz.x;
+      newPoints[r].push_back(
+        vecX * dtempX + vecY * dtempY + vecZ * rz.y + cent );
     }
   }
+
   if ( newPoints[ 0 ].empty() ) {
     return;
-  }
-
-  // Profile samples in the revolution frame as (radius, height) pairs, for
-  // the closest-point projection the adaptive refinement below evaluates.
-  std::vector< glm::dvec2 > profileRZ;
-
-  profileRZ.reserve( surface.RevolutionSurface.Profile.curve.points.size() );
-
-  for ( const glm::dvec3 &point : surface.RevolutionSurface.Profile.curve.points ) {
-
-    glm::dvec3 delta = point - cent;
-
-    double dx = glm::dot( vecX, delta );
-    double dy = glm::dot( vecY, delta );
-    double dz = glm::dot( vecZ, delta );
-
-    profileRZ.emplace_back( std::sqrt( dx * dx + dy * dy ), dz );
   }
 
   WingedEdgeMesh< glm::dvec3 > mesh;
@@ -241,68 +710,9 @@ inline void TriangulateRevolution(Geometry &geometry,
     }
   }
 
-  // Adaptive on-surface refinement (same machinery as the sphere/torus
-  // paths): edge midpoints are projected back onto the revolved profile -
-  // keep the query point's angle around the axis, snap its (radius, height)
-  // to the closest point on the profile polyline.
-  tesselate(
-    mesh,
-    [&]( const glm::dvec3 &point ) {
-
-      glm::dvec3 delta = point - cent;
-
-      double dx = glm::dot( vecX, delta );
-      double dy = glm::dot( vecY, delta );
-      double dz = glm::dot( vecZ, delta );
-
-      double dd = std::sqrt( dx * dx + dy * dy );
-
-      if ( dd < 1e-12 ) {
-        return point;  // On the axis - angle undefined, nothing to round.
-      }
-
-      double sinAngle = dx / dd;
-      double cosAngle = dy / dd;
-
-      glm::dvec2 query( dd, dz );
-      glm::dvec2 best  = profileRZ[ 0 ];
-      double bestDist2 = std::numeric_limits< double >::max();
-
-      for ( size_t where = 0; where + 1 < profileRZ.size(); ++where ) {
-
-        const glm::dvec2 &from = profileRZ[ where ];
-        const glm::dvec2 &to   = profileRZ[ where + 1 ];
-
-        glm::dvec2 segment = to - from;
-        double     length2 = glm::dot( segment, segment );
-
-        double t =
-          length2 > 0 ?
-            std::clamp( glm::dot( query - from, segment ) / length2, 0.0, 1.0 ) :
-            0.0;
-
-        glm::dvec2 candidate = from + segment * t;
-        double     dist2     = glm::dot( query - candidate, query - candidate );
-
-        if ( dist2 < bestDist2 ) {
-          bestDist2 = dist2;
-          best      = candidate;
-        }
-      }
-
-      return
-        vecX * ( sinAngle * best.x ) +
-        vecY * ( cosAngle * best.x ) +
-        vecZ * best.y + cent;
-    },
-    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
-    MAX_DEFLECTION );
-
-  appendMeshToGeometry( mesh, geometry );
+  refineAndAppend( mesh );
 }
 
-
-// TODO: review and simplify
 inline void TriangulateSphericalSurface(Geometry &geometry,
                                         const std::vector<IfcBound3D> &bounds,
                                         IfcSurface &surface) {
@@ -436,82 +846,12 @@ inline void TriangulateSphericalSurface(Geometry &geometry,
 // regardless of the unwrap's distortion.
 // ---------------------------------------------------------------------------
 
-namespace toroidal_detail {
-
-constexpr double kPi    = 3.141592653589793238462643;
-constexpr double kTwoPi = 2.0 * kPi;
-
-/** Wrap an angle difference into (-pi, pi]. */
-inline double wrapDeltaPi( double delta ) {
-
-  delta = std::fmod( delta, kTwoPi );
-
-  if ( delta > kPi ) {
-    delta -= kTwoPi;
-  } else if ( delta <= -kPi ) {
-    delta += kTwoPi;
-  }
-
-  return delta;
-}
-
-/** Positive modulo into [0, 2pi). */
-inline double positiveMod2Pi( double angle ) {
-
-  double result = std::fmod( angle, kTwoPi );
-
-  if ( result < 0 ) {
-    result += kTwoPi;
-  }
-
-  return result;
-}
-
-struct BoundaryPoint {
-  glm::dvec3 world;
-  double     theta;
-  double     phi;
-};
-
-/**
- * Largest empty circular gap of angles (each in [0, 2pi)).
- *
- * @return { gapSize, gapMidpoint } - for an empty input the whole circle is
- * one gap.
- */
-inline std::pair< double, double > largestCircularGap( std::vector< double > &angles ) {
-
-  if ( angles.empty() ) {
-    return { kTwoPi, 0.0 };
-  }
-
-  std::sort( angles.begin(), angles.end() );
-
-  // Wrap-around gap between the last and first sample.
-  double bestGap = ( angles.front() + kTwoPi ) - angles.back();
-  double bestMid = positiveMod2Pi( angles.back() + bestGap * 0.5 );
-
-  for ( size_t where = 1; where < angles.size(); ++where ) {
-
-    double gap = angles[ where ] - angles[ where - 1 ];
-
-    if ( gap > bestGap ) {
-      bestGap = gap;
-      bestMid = angles[ where - 1 ] + gap * 0.5;
-    }
-  }
-
-  return { bestGap, bestMid };
-}
-
-}  // namespace toroidal_detail
-
 inline void TriangulateToroidalSurface(
     Geometry &geometry,
     const std::vector<IfcBound3D> &bounds,
     IfcSurface &surface) {
 
-  using namespace toroidal_detail;
+  using namespace unwrap_detail;
 
   if ( bounds.empty() ) {
     return;
