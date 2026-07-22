@@ -1804,107 +1804,416 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 }
 
 // TODO: review and simplify
+// ---------------------------------------------------------------------------
+// Extrusion surfaces: exact developable unwrap with CDT trimming.
+//
+// The previous implementation ignored the trim loops, dropped the profile's
+// z-coordinate, and swept in the wrong frame ("SIMPLE EXTRUSION, NOT
+// TRIMMED") - in practice worse than the TriangulateBounds fallback these
+// faces used to hit when the extractor failed to supply a profile. An
+// extrusion surface is developable, so the unwrap is exact: s = arclength
+// along the profile projected perpendicular to the axis, t = distance along
+// the axis. Trim loops CDT in (s, t) with exact hole nesting; a closed
+// profile makes s periodic and gets the same winding/gap/annulus treatment
+// as the revolution unwrap. Any degeneracy falls back to TriangulateBounds,
+// which reproduces the old fail-soft appearance.
+// ---------------------------------------------------------------------------
+
 inline void TriangulateExtrusion(Geometry &geometry,
                                  std::vector<IfcBound3D> &bounds,
                                  IfcSurface &surface) {
-  // NO EXAMPLE FILES ABOUT THIS CASE
 
-  // THIS IS A SIMPLE EXTRUSION, NOT TRIMMED
+  using namespace unwrap_detail;
 
-  double len = surface.ExtrusionSurface.Length;
-  glm::dvec3 dir = surface.ExtrusionSurface.Direction;
+  const std::vector< glm::dvec3 > &profilePoints =
+    surface.ExtrusionSurface.Profile.curve.points;
 
-  if (!surface.ExtrusionSurface.Profile.isComposite) {
-    for (size_t j = 0;
-         j < surface.ExtrusionSurface.Profile.curve.points.size() - 1; j++) {
-      int j2 = j + 1;
+  glm::dvec3 axis = surface.ExtrusionSurface.Direction;
 
-      double npx =
-          surface.ExtrusionSurface.Profile.curve.points[j].x + dir.x * len;
-      double npy =
-          surface.ExtrusionSurface.Profile.curve.points[j].y + dir.y * len;
-      double npz = dir.z * len;
-      glm::dvec3 nptj1 = glm::dvec3(npx, npy, npz);
-      npx = surface.ExtrusionSurface.Profile.curve.points[j2].x + dir.x * len;
-      npy = surface.ExtrusionSurface.Profile.curve.points[j2].y + dir.y * len;
-      npz = dir.z * len;
-      glm::dvec3 nptj2 = glm::dvec3(npx, npy, npz);
+  double axisLength = glm::length( axis );
 
-      uint32_t nptj1i = geometry.MakeVertex( nptj1 );
-      uint32_t nptj2i = geometry.MakeVertex( nptj2 );
+  if ( profilePoints.size() < 2 || axisLength < 1e-12 ) {
+    TriangulateBounds( geometry, bounds );
+    return;
+  }
 
-      uint32_t a = geometry.MakeVertex(
-        glm::dvec3(
-          surface.ExtrusionSurface.Profile.curve.points[j].x,
-          surface.ExtrusionSurface.Profile.curve.points[j].y,
-          0 ) ); 
+  axis /= axisLength;
 
-      uint32_t b = geometry.MakeVertex(
-        glm::dvec3(
-          surface.ExtrusionSurface.Profile.curve.points[j2].x,
-          surface.ExtrusionSurface.Profile.curve.points[j2].y,
-          0 ) ); 
+  // Profile projected onto the plane through the origin perpendicular to the
+  // axis - the developable surface is fully described by (base curve, axis).
+  std::vector< glm::dvec3 > basePoints;
+  std::vector< double >     baseArc;
 
-      geometry.MakeTriangle(
-        a,
-        b,
-        nptj1i );
+  basePoints.reserve( profilePoints.size() );
+  baseArc.reserve( profilePoints.size() );
 
-      geometry.MakeTriangle(
-        b,
-        nptj2i,
-        nptj1i );
+  double baseLength = 0.0;
+
+  for ( const glm::dvec3 &point : profilePoints ) {
+
+    glm::dvec3 projected = point - axis * glm::dot( point, axis );
+
+    if ( !basePoints.empty() ) {
+      baseLength += glm::distance( basePoints.back(), projected );
     }
-  } else {
-    for (size_t i = 0; i < surface.ExtrusionSurface.Profile.profiles.size();
-         i++) {
-      for (size_t j = 0;
-           j <
-           surface.ExtrusionSurface.Profile.profiles[i].curve.points.size() - 1;
-           j++) {
-        int j2 = j + 1;
 
-        double npx =
-            surface.ExtrusionSurface.Profile.profiles[i].curve.points[j].x +
-            dir.x * len;
-        double npy =
-            surface.ExtrusionSurface.Profile.profiles[i].curve.points[j].y +
-            dir.y * len;
-        double npz = dir.z * len;
-        glm::dvec3 nptj1 = glm::dvec3(npx, npy, npz);
-        npx = surface.ExtrusionSurface.Profile.profiles[i].curve.points[j2].x +
-              dir.x * len;
-        npy = surface.ExtrusionSurface.Profile.profiles[i].curve.points[j2].y +
-              dir.y * len;
-        npz = dir.z * len;
-        glm::dvec3 nptj2 = glm::dvec3(npx, npy, npz);
+    basePoints.push_back( projected );
+    baseArc.push_back( baseLength );
+  }
 
-        uint32_t nptj1i = geometry.MakeVertex( nptj1 );
-        uint32_t nptj2i = geometry.MakeVertex( nptj2 );
+  if ( baseLength < 1e-12 ) {
+    TriangulateBounds( geometry, bounds );
+    return;
+  }
 
-      uint32_t a = geometry.MakeVertex(
-        glm::dvec3(
-                surface.ExtrusionSurface.Profile.profiles[i].curve.points[j].x,
-                surface.ExtrusionSurface.Profile.profiles[i].curve.points[j].y,
-                0) ); 
-      
-      uint32_t b = geometry.MakeVertex(
-        glm::dvec3(
-                surface.ExtrusionSurface.Profile.profiles[i].curve.points[j2].x,
-                surface.ExtrusionSurface.Profile.profiles[i].curve.points[j2].y,
-                0) ); 
+  bool profileClosed =
+    glm::distance( basePoints.front(), basePoints.back() ) <
+      baseLength * 1e-9;
 
-        geometry.MakeTriangle(
-          a,
-          b,
-          nptj1i);
-        geometry.MakeTriangle(
-          b,
-          nptj2i,
-          nptj1i);
+  // Closest point on the projected profile polyline: the snapped base point
+  // and its normalized arclength parameter.
+  auto closestOnBase = [&]( const glm::dvec3 &query ) {
+
+    glm::dvec3 best      = basePoints[ 0 ];
+    double     bestArc   = 0.0;
+    double     bestDist2 = std::numeric_limits< double >::max();
+
+    for ( size_t where = 0; where + 1 < basePoints.size(); ++where ) {
+
+      const glm::dvec3 &from = basePoints[ where ];
+      const glm::dvec3 &to   = basePoints[ where + 1 ];
+
+      glm::dvec3 segment = to - from;
+      double     length2 = glm::dot( segment, segment );
+
+      double t =
+        length2 > 0 ?
+          std::clamp( glm::dot( query - from, segment ) / length2, 0.0, 1.0 ) :
+          0.0;
+
+      glm::dvec3 candidate = from + segment * t;
+      double     dist2     = glm::dot( query - candidate, query - candidate );
+
+      if ( dist2 < bestDist2 ) {
+        bestDist2 = dist2;
+        best      = candidate;
+        bestArc   = baseArc[ where ] + t * std::sqrt( length2 );
+      }
+    }
+
+    return std::pair< glm::dvec3, double >( best, bestArc / baseLength );
+  };
+
+  // Exact on-surface projection for the adaptive refinement: keep the axial
+  // coordinate, snap the cross-axis position to the profile.
+  auto surfaceProjection = [&]( const glm::dvec3 &point ) {
+
+    double t = glm::dot( point, axis );
+
+    glm::dvec3 foot = closestOnBase( point - axis * t ).first;
+
+    return foot + axis * t;
+  };
+
+  // Scale-aware refinement floor: stop subdividing once midpoint deviation
+  // drops below 0.1% of the face's extent (the same visual criterion as the
+  // revolution ring count). The shared absolute MAX_DEFLECTION reads as
+  // "refine until the budget runs out" at large model scales, and with
+  // 1,370 extrusion faces on the jet compressor alone that doubled the
+  // model's triangle count for invisible gains.
+  auto refineAndAppend = [&]( WingedEdgeMesh< glm::dvec3 > &mesh ) {
+
+    glm::dvec3 boxMin( std::numeric_limits< double >::max() );
+    glm::dvec3 boxMax( std::numeric_limits< double >::lowest() );
+
+    for ( const glm::dvec3 &vertex : mesh.vertices ) {
+      boxMin = glm::min( boxMin, vertex );
+      boxMax = glm::max( boxMax, vertex );
+    }
+
+    double diagonal   = glm::distance( boxMin, boxMax );
+    double deflection = diagonal * 1e-3;
+
+    tesselate(
+      mesh,
+      surfaceProjection,
+      mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+      std::max( MAX_DEFLECTION, deflection * deflection ) );
+
+    appendMeshToGeometry( mesh, geometry );
+  };
+
+  // --- Boundary loops -> (s, t): s the normalized profile arclength
+  // (periodic for a closed profile), t the axial distance.
+
+  std::vector< std::vector< BoundaryPoint > > loops;
+
+  loops.reserve( bounds.size() );
+
+  auto parameterDuplicate = [&]( const BoundaryPoint &a, double s, double t ) {
+
+    double deltaS =
+      profileClosed ? wrapDeltaPi( s - a.theta ) : ( s - a.theta );
+
+    return std::abs( deltaS ) < 1e-12 && std::abs( t - a.phi ) < 1e-12;
+  };
+
+  for ( const IfcBound3D &bound : bounds ) {
+
+    std::vector< BoundaryPoint > loop;
+
+    loop.reserve( bound.curve.points.size() );
+
+    for ( const glm::dvec3 &point : bound.curve.points ) {
+
+      if ( !std::isfinite( point.x ) || !std::isfinite( point.y ) ||
+           !std::isfinite( point.z ) ) {
+        continue;
+      }
+
+      double t = glm::dot( point, axis );
+      double s = closestOnBase( point - axis * t ).second;
+
+      // A closed profile's s is periodic - store it as an angle so the
+      // shared winding/gap helpers apply verbatim.
+      if ( profileClosed ) {
+        s = positiveMod2Pi( s * kTwoPi );
+      }
+
+      if ( !loop.empty() && parameterDuplicate( loop.back(), s, t ) ) {
+        continue;
+      }
+
+      loop.push_back( BoundaryPoint{ point, s, t } );
+    }
+
+    while ( loop.size() > 1 &&
+            parameterDuplicate( loop.front(), loop.back().theta, loop.back().phi ) ) {
+      loop.pop_back();
+    }
+
+    if ( loop.size() >= 3 ) {
+      loops.push_back( std::move( loop ) );
+    }
+  }
+
+  if ( loops.empty() ) {
+    TriangulateBounds( geometry, bounds );
+    return;
+  }
+
+  // Axial range for normalizing t in the 2D layouts.
+  double loT = std::numeric_limits< double >::max();
+  double hiT = std::numeric_limits< double >::lowest();
+
+  for ( const std::vector< BoundaryPoint > &loop : loops ) {
+    for ( const BoundaryPoint &point : loop ) {
+      loT = std::min( loT, point.phi );
+      hiT = std::max( hiT, point.phi );
+    }
+  }
+
+  double spanT = std::max( hiT - loT, 1e-12 );
+
+  bool wrapsS = false;
+
+  if ( profileClosed ) {
+
+    bool windsS = false;
+
+    std::vector< double > sSamples;
+
+    for ( const std::vector< BoundaryPoint > &loop : loops ) {
+
+      double sumS = 0.0;
+
+      for ( size_t where = 0, count = loop.size(); where < count; ++where ) {
+        sumS += wrapDeltaPi( loop[ ( where + 1 ) % count ].theta - loop[ where ].theta );
+        sSamples.push_back( loop[ where ].theta );
+      }
+
+      if ( std::llround( sumS / kTwoPi ) != 0 ) {
+        windsS = true;
+      }
+    }
+
+    auto [ sGap, sCut ] = largestCircularGap( sSamples );
+
+    wrapsS = windsS || sGap < 1e-3;
+
+    if ( !wrapsS ) {
+      // Open up the covered arc: rebase every s off the branch cut so the
+      // rectangle layout below sees a contiguous interval.
+      for ( std::vector< BoundaryPoint > &loop : loops ) {
+        for ( BoundaryPoint &point : loop ) {
+          point.theta = positiveMod2Pi( point.theta - sCut );
+        }
       }
     }
   }
+
+  std::vector< std::vector< glm::dvec2 > > loops2D;
+
+  loops2D.reserve( loops.size() );
+
+  if ( wrapsS ) {
+
+    // Annulus: angle = s, radius = 1 + normalized t in [1, 2].
+    for ( const std::vector< BoundaryPoint > &loop : loops ) {
+
+      std::vector< glm::dvec2 > loop2D;
+
+      loop2D.reserve( loop.size() );
+
+      for ( const BoundaryPoint &point : loop ) {
+
+        double radius = 1.0 + ( point.phi - loT ) / spanT;
+
+        loop2D.emplace_back(
+          radius * std::cos( point.theta ),
+          radius * std::sin( point.theta ) );
+      }
+
+      loops2D.push_back( std::move( loop2D ) );
+    }
+
+  } else {
+
+    double loS = std::numeric_limits< double >::max();
+    double hiS = std::numeric_limits< double >::lowest();
+
+    for ( const std::vector< BoundaryPoint > &loop : loops ) {
+      for ( const BoundaryPoint &point : loop ) {
+        loS = std::min( loS, point.theta );
+        hiS = std::max( hiS, point.theta );
+      }
+    }
+
+    double spanS = std::max( hiS - loS, 1e-12 );
+
+    for ( const std::vector< BoundaryPoint > &loop : loops ) {
+
+      std::vector< glm::dvec2 > loop2D;
+
+      loop2D.reserve( loop.size() );
+
+      for ( const BoundaryPoint &point : loop ) {
+        loop2D.emplace_back(
+          ( point.theta - loS ) / spanS,
+          ( point.phi - loT ) / spanT );
+      }
+
+      loops2D.push_back( std::move( loop2D ) );
+    }
+  }
+
+  // --- Weld, dedupe, CDT - identical machinery to the torus/revolution
+  // unwraps; failures fall back to the pre-existing bounds triangulation.
+
+  std::vector< CDT::V2d< double > > cdtVertices;
+  std::vector< glm::dvec3 >         cdtWorld;
+  std::vector< CDT::Edge >          cdtEdges;
+
+  std::map< std::pair< long long, long long >, uint32_t > weld;
+  std::set< std::pair< uint32_t, uint32_t > >             edgeSet;
+
+  bool inputFinite = true;
+
+  auto weldVertex = [&]( const glm::dvec2 &position, const glm::dvec3 &world ) {
+
+    std::pair< long long, long long > key(
+      std::llround( position.x * 1e9 ),
+      std::llround( position.y * 1e9 ) );
+
+    auto [ found, isNew ] =
+      weld.try_emplace( key, static_cast< uint32_t >( cdtVertices.size() ) );
+
+    if ( isNew ) {
+      if ( !std::isfinite( position.x ) || !std::isfinite( position.y ) ) {
+        inputFinite = false;
+      }
+      cdtVertices.emplace_back( position.x, position.y );
+      cdtWorld.push_back( world );
+    }
+
+    return found->second;
+  };
+
+  for ( size_t which = 0; which < loops.size(); ++which ) {
+
+    const std::vector< BoundaryPoint > &loop   = loops[ which ];
+    const std::vector< glm::dvec2 >    &loop2D = loops2D[ which ];
+
+    for ( size_t where = 0, count = loop.size(); where < count; ++where ) {
+
+      size_t next = ( where + 1 ) % count;
+
+      uint32_t v1 = weldVertex( loop2D[ where ], loop[ where ].world );
+      uint32_t v2 = weldVertex( loop2D[ next ], loop[ next ].world );
+
+      if ( v1 == v2 ) {
+        continue;
+      }
+
+      std::pair< uint32_t, uint32_t > ordered(
+        std::min( v1, v2 ), std::max( v1, v2 ) );
+
+      if ( edgeSet.insert( ordered ).second ) {
+        cdtEdges.emplace_back( v1, v2 );
+      }
+    }
+  }
+
+  if ( !inputFinite || cdtEdges.size() < 3 ) {
+    TriangulateBounds( geometry, bounds );
+    return;
+  }
+
+  CDT::Triangulation< double > triangulation(
+    CDT::VertexInsertionOrder::Auto,
+    CDT::IntersectingConstraintEdges::NotAllowed, 0 );
+
+  try
+  {
+    conway::AllocTagScope cdtTag( conway::AllocSite::Cdt );
+    triangulation.insertVertices( cdtVertices );
+    triangulation.insertEdges( cdtEdges );
+    triangulation.eraseOuterTrianglesAndHoles();
+  }
+  catch ( const CDT::Error &e )
+  {
+    Logger::logError( "CDT Exception (extrusion unwrap): %s", e.what() );
+    TriangulateBounds( geometry, bounds );
+    return;
+  }
+
+  WingedEdgeMesh< glm::dvec3 > mesh;
+
+  mesh.vertices.reserve( cdtWorld.size() );
+
+  for ( const glm::dvec3 &world : cdtWorld ) {
+    mesh.vertices.push_back( world );
+  }
+
+  // No per-triangle orientation pass: appendMeshToGeometry normalizes
+  // winding by dominant-plane projection either way.
+  for ( const CDT::Triangle &triangle : triangulation.triangles ) {
+
+    auto [ cdtv1, cdtv2, cdtv3 ] = triangle.vertices;
+
+    if ( cdtv1 == cdtv2 || cdtv2 == cdtv3 || cdtv3 == cdtv1 ) {
+      continue;
+    }
+
+    mesh.makeTriangle( cdtv1, cdtv2, cdtv3 );
+  }
+
+  if ( mesh.triangles.empty() ) {
+    TriangulateBounds( geometry, bounds );
+    return;
+  }
+
+  refineAndAppend( mesh );
 }
 
 constexpr size_t INVERSE_GRID_SIDE   = 8.0; 
