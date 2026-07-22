@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <glm/glm.hpp>
 #include <map>
 #include <optional>
@@ -46,13 +47,6 @@ inline void TriangulateRevolution(Geometry &geometry,
   glm::dvec3 vecZ = glm::normalize(surface.RevolutionSurface.Direction[2]);
 
   std::vector<std::vector<glm::dvec3>> newPoints;
-
-  double numRots = 10;
-
-  for (int r = 0; r < numRots; r++) {
-    std::vector<glm::dvec3> newList;
-    newPoints.push_back(newList);
-  }
 
   std::vector<glm::dvec3> bounding;
   std::vector<double> angleVec;
@@ -155,6 +149,27 @@ inline void TriangulateRevolution(Geometry &geometry,
   double startRad = startDegrees / 180 * (double)CONST_PI;
   double endRad   = endDegrees / 180 * (double)CONST_PI;
   double radSpan  = endRad - startRad;
+
+  // Ring count adapts to the swept span: 64 segments per full turn (sagitta
+  // ~0.12% of radius) instead of the old fixed 10 rings, whose ~40-degree
+  // facets read as a polygonal shaft on the Jetenginestep turbine (#149).
+  // The floor keeps small spans at least as dense as before. This sets the
+  // resolution of the grid BORDER (the end rings/profile rows): the interior
+  // is further refined by the adaptive tesselate below, but border edges are
+  // never subdivided, so they must start smooth enough on their own.
+  constexpr double FULL_TURN_SEGMENTS = 64.0;
+
+  int numRots = std::clamp(
+    static_cast< int >( std::ceil(
+      radSpan / ( 2.0 * (double)CONST_PI / FULL_TURN_SEGMENTS ) ) ) + 1,
+    10,
+    static_cast< int >( FULL_TURN_SEGMENTS ) + 1 );
+
+  for (int r = 0; r < numRots; r++) {
+    std::vector<glm::dvec3> newList;
+    newPoints.push_back(newList);
+  }
+
   double radStep  = radSpan / (numRots - 1);
 
   for (size_t i = 0; i < surface.RevolutionSurface.Profile.curve.points.size();
@@ -178,19 +193,112 @@ inline void TriangulateRevolution(Geometry &geometry,
       newPoints[r].push_back(newPt);
     }
   }
-  for (int r = 0; r < numRots - 1; r++) {
-    int r1 = r + 1;
-    for (size_t s = 0; s < newPoints[r].size() - 1; s++) {
+  if ( newPoints[ 0 ].empty() ) {
+    return;
+  }
 
-      uint32_t a = geometry.MakeVertex( newPoints[ r ][ s ] );
-      uint32_t b = geometry.MakeVertex( newPoints[ r ][ s + 1 ] );
-      uint32_t c = geometry.MakeVertex( newPoints[ r1 ][ s ] );
-      uint32_t d = geometry.MakeVertex( newPoints[ r1 ][ s + 1 ] );
+  // Profile samples in the revolution frame as (radius, height) pairs, for
+  // the closest-point projection the adaptive refinement below evaluates.
+  std::vector< glm::dvec2 > profileRZ;
 
-      geometry.MakeTriangle( a, b, c );
-      geometry.MakeTriangle( c, b, d );
+  profileRZ.reserve( surface.RevolutionSurface.Profile.curve.points.size() );
+
+  for ( const glm::dvec3 &point : surface.RevolutionSurface.Profile.curve.points ) {
+
+    glm::dvec3 delta = point - cent;
+
+    double dx = glm::dot( vecX, delta );
+    double dy = glm::dot( vecY, delta );
+    double dz = glm::dot( vecZ, delta );
+
+    profileRZ.emplace_back( std::sqrt( dx * dx + dy * dy ), dz );
+  }
+
+  WingedEdgeMesh< glm::dvec3 > mesh;
+
+  size_t profileCount = newPoints[ 0 ].size();
+
+  for ( int r = 0; r < numRots; r++ ) {
+    for ( size_t s = 0; s < profileCount; s++ ) {
+      mesh.vertices.push_back( newPoints[ r ][ s ] );
     }
   }
+
+  for ( int r = 0; r < numRots - 1; r++ ) {
+
+    uint32_t row0 = static_cast< uint32_t >( r * profileCount );
+    uint32_t row1 = static_cast< uint32_t >( ( r + 1 ) * profileCount );
+
+    for ( size_t s = 0; s + 1 < profileCount; s++ ) {
+
+      uint32_t a = row0 + static_cast< uint32_t >( s );
+      uint32_t b = row0 + static_cast< uint32_t >( s + 1 );
+      uint32_t c = row1 + static_cast< uint32_t >( s );
+      uint32_t d = row1 + static_cast< uint32_t >( s + 1 );
+
+      mesh.makeTriangle( a, b, c );
+      mesh.makeTriangle( c, b, d );
+    }
+  }
+
+  // Adaptive on-surface refinement (same machinery as the sphere/torus
+  // paths): edge midpoints are projected back onto the revolved profile -
+  // keep the query point's angle around the axis, snap its (radius, height)
+  // to the closest point on the profile polyline.
+  tesselate(
+    mesh,
+    [&]( const glm::dvec3 &point ) {
+
+      glm::dvec3 delta = point - cent;
+
+      double dx = glm::dot( vecX, delta );
+      double dy = glm::dot( vecY, delta );
+      double dz = glm::dot( vecZ, delta );
+
+      double dd = std::sqrt( dx * dx + dy * dy );
+
+      if ( dd < 1e-12 ) {
+        return point;  // On the axis - angle undefined, nothing to round.
+      }
+
+      double sinAngle = dx / dd;
+      double cosAngle = dy / dd;
+
+      glm::dvec2 query( dd, dz );
+      glm::dvec2 best  = profileRZ[ 0 ];
+      double bestDist2 = std::numeric_limits< double >::max();
+
+      for ( size_t where = 0; where + 1 < profileRZ.size(); ++where ) {
+
+        const glm::dvec2 &from = profileRZ[ where ];
+        const glm::dvec2 &to   = profileRZ[ where + 1 ];
+
+        glm::dvec2 segment = to - from;
+        double     length2 = glm::dot( segment, segment );
+
+        double t =
+          length2 > 0 ?
+            std::clamp( glm::dot( query - from, segment ) / length2, 0.0, 1.0 ) :
+            0.0;
+
+        glm::dvec2 candidate = from + segment * t;
+        double     dist2     = glm::dot( query - candidate, query - candidate );
+
+        if ( dist2 < bestDist2 ) {
+          bestDist2 = dist2;
+          best      = candidate;
+        }
+      }
+
+      return
+        vecX * ( sinAngle * best.x ) +
+        vecY * ( cosAngle * best.x ) +
+        vecZ * best.y + cent;
+    },
+    mesh.triangles.size() * MAX_TRIANGLE_AMPLIFACTION,
+    MAX_DEFLECTION );
+
+  appendMeshToGeometry( mesh, geometry );
 }
 
 
