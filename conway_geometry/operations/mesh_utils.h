@@ -1686,14 +1686,18 @@ inline void TriangulateConicalSurface(
     // fit sidesteps the SemiAngle sign convention - the legacy projection
     // uses tan(fabs(semiAngle)), which points the wrong way for narrowing
     // cones - and tolerates a Radius given at a different reference plane.
-    double sumZ  = 0.0;
-    double sumR  = 0.0;
-    double sumZZ = 0.0;
-    double sumZR = 0.0;
-    size_t fitSamples = 0;
+    // Fitted in centered form: raw moments (n*sumZZ - sumZ^2) cancel
+    // catastrophically for a face at a large z-offset with a small span.
+    std::vector< glm::dvec2 > generatorSamples;
 
     double loT = std::numeric_limits< double >::max();
     double hiT = std::numeric_limits< double >::lowest();
+
+    // A boundary sample on the axis is the cone's apex: its theta is
+    // undefined, so the unwrap cannot represent the fan around it - the
+    // legacy path (which keeps the apex at the projection center and fans
+    // to the rim) handles that case better. Bail out to it.
+    bool sawAxisPoint = false;
 
     std::vector< std::vector< BoundaryPoint > > loops;
 
@@ -1720,17 +1724,12 @@ inline void TriangulateConicalSurface(
 
         double dd = std::sqrt( dx * dx + dy * dy );
 
-        sumZ  += dz;
-        sumR  += dd;
-        sumZZ += dz * dz;
-        sumZR += dz * dd;
-        fitSamples++;
-
-        // On-axis (apex) sample - the angle is undefined, drop it from the
-        // loop but keep it in the generator fit above.
         if ( dd < 1e-12 ) {
+          sawAxisPoint = true;
           continue;
         }
+
+        generatorSamples.emplace_back( dz, dd );
 
         loT = std::min( loT, dz );
         hiT = std::max( hiT, dz );
@@ -1744,17 +1743,31 @@ inline void TriangulateConicalSurface(
     }
 
     double spanT = hiT - loT;
-    double fitDenominator =
-      static_cast< double >( fitSamples ) * sumZZ - sumZ * sumZ;
 
-    if ( !loops.empty() && spanT > 1e-12 &&
-         fitDenominator > 1e-12 * spanT * spanT ) {
+    double meanZ = 0.0;
+    double meanR = 0.0;
 
-      double slope =
-        ( static_cast< double >( fitSamples ) * sumZR - sumZ * sumR ) /
-          fitDenominator;
-      double radiusAtOrigin =
-        ( sumR - slope * sumZ ) / static_cast< double >( fitSamples );
+    for ( const glm::dvec2 &sample : generatorSamples ) {
+      meanZ += sample.x;
+      meanR += sample.y;
+    }
+
+    if ( !generatorSamples.empty() ) {
+      meanZ /= static_cast< double >( generatorSamples.size() );
+      meanR /= static_cast< double >( generatorSamples.size() );
+    }
+
+    double covZZ = 0.0;
+    double covZR = 0.0;
+
+    for ( const glm::dvec2 &sample : generatorSamples ) {
+      covZZ += ( sample.x - meanZ ) * ( sample.x - meanZ );
+      covZR += ( sample.x - meanZ ) * ( sample.y - meanR );
+    }
+
+    if ( !sawAxisPoint && !loops.empty() && spanT > 1e-12 && covZZ > 0.0 ) {
+
+      double slope = covZR / covZZ;
 
       // Normalize t into [0, 1] and drop parameter-duplicate neighbors
       // (the weld would collapse them anyway; empty edges upset CDT less
@@ -1828,7 +1841,7 @@ inline void TriangulateConicalSurface(
             }
 
             double targetRadius =
-              std::max( radiusAtOrigin + slope * dz, 0.0 );
+              std::max( meanR + slope * ( dz - meanZ ), 0.0 );
 
             return cent +
               vecX * ( dx / dd * targetRadius ) +
@@ -2060,6 +2073,10 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
     double loT = std::numeric_limits< double >::max();
     double hiT = std::numeric_limits< double >::lowest();
 
+    // An on-axis boundary sample can't lie on the cylinder - it flags
+    // degenerate input the legacy path already has behavior for.
+    bool sawAxisPoint = false;
+
     std::vector< std::vector< BoundaryPoint > > loops;
 
     loops.reserve( bounds.size() );
@@ -2085,8 +2102,8 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
         double dd = std::sqrt( dx * dx + dy * dy );
 
-        // On-axis sample - the angle is undefined, drop it.
         if ( dd < 1e-12 ) {
+          sawAxisPoint = true;
           continue;
         }
 
@@ -2103,7 +2120,7 @@ inline void TriangulateCylindricalSurface(Geometry &geometry,
 
     double spanT = hiT - loT;
 
-    if ( !loops.empty() && spanT > 1e-12 ) {
+    if ( !sawAxisPoint && !loops.empty() && spanT > 1e-12 ) {
 
       auto parameterDuplicate = []( const BoundaryPoint &a,
                                     const BoundaryPoint &b ) {
